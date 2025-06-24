@@ -31,26 +31,12 @@ audio:
       channels: "1"          # Mono for most audiobooks
       description: "High quality mono audiobooks"
     
-    audiobook_quality:
-      bitrate: "64k"
-      application: "voip"
-      cutoff: null
-      channels: "1"
-      description: "High quality mono audiobooks (same as audiobook)"
-    
     audiobook_stereo:
       bitrate: "96k"          # Better quality for stereo (upgraded from 48k)
       application: "voip"
       cutoff: null           # No frequency cutoff - preserve full range
       channels: null         # Keep original channels
       description: "High quality stereo audiobooks"
-    
-    audiobook_stereo_quality:
-      bitrate: "96k"
-      application: "voip"
-      cutoff: null
-      channels: null
-      description: "High quality stereo audiobooks (same as audiobook_stereo)"
     
     high:
       bitrate: "192k"

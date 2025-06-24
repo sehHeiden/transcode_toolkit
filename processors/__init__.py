@@ -5,7 +5,7 @@ from .video_processor import VideoProcessor, VideoEstimator
 
 __all__ = [
     "AudioProcessor",
-    "AudioEstimator", 
+    "AudioEstimator",
     "VideoProcessor",
     "VideoEstimator",
 ]

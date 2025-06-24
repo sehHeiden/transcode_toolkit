@@ -6,7 +6,7 @@ import logging
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Dict, Any, List, Tuple, NamedTuple, cast
+from typing import Dict, Any, List, Tuple, NamedTuple
 from config import get_config
 
 
@@ -67,7 +67,7 @@ def _estimate(meta: Dict[str, Any], br: int) -> int:
 def analyse(root: Path, target_br: int) -> List[Tuple[Path, int, int]]:
     config = get_config()
     audio_exts = config.audio.extensions
-    
+
     rows = []
     for p in root.rglob("*"):
         if p.suffix.lower() in audio_exts:
@@ -84,7 +84,7 @@ def compare_presets(root: Path) -> List[EstimationResult]:
     """Compare all presets and return estimation results for each."""
     config = get_config()
     audio_exts = config.audio.extensions
-    
+
     files = []
     for p in root.rglob("*"):
         if p.suffix.lower() in audio_exts:
@@ -99,7 +99,7 @@ def compare_presets(root: Path) -> List[EstimationResult]:
     for preset_name, preset_config in config.audio.presets.items():
         # Convert bitrate string to bits per second
         bitrate = int(preset_config.bitrate.rstrip("k")) * 1000
-        
+
         current_size = sum(meta["size"] for _, meta in files)
         estimated_size = sum(_estimate(meta, bitrate) for _, meta in files)
         saving = current_size - estimated_size
@@ -259,7 +259,7 @@ def cli(
     # Convert bitrate string to bits per second
     preset_config = config.audio.presets[preset]
     target_bitrate = int(preset_config.bitrate.rstrip("k")) * 1000
-    
+
     rows = analyse(path, target_bitrate)
     print_summary(rows, preset=preset, csv_path=csv_path)
 
