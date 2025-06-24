@@ -1,4 +1,5 @@
 """video.blur_quality – (placeholder) Blur analysis → target resolution & CRF."""
+
 import json
 import logging
 from pathlib import Path
@@ -11,4 +12,3 @@ def cli(path: Path, *, json_path: str | None, verbose: bool) -> None:
     print(summary)
     if json_path:
         Path(json_path).write_text(json.dumps(summary))
-

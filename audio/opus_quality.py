@@ -1,4 +1,5 @@
 """audio.opus_quality – (placeholder) analyse audio and propose Opus params."""
+
 import json
 import logging
 from pathlib import Path
@@ -10,4 +11,3 @@ def cli(path: Path, *, json_path: str | None, verbose: bool) -> None:
     print(info)
     if json_path:
         Path(json_path).write_text(json.dumps(info))
-

@@ -1,0 +1,123 @@
+# Media Toolkit Configuration
+# This file contains all presets and settings for audio and video transcoding
+
+audio:
+  # Size reduction ratio threshold - keep re-encode only if ≥ 5% smaller
+  size_keep_ratio: 0.95
+  
+  # Supported audio file extensions
+  extensions:
+    - .flac
+    - .mp3
+    - .wav
+    - .aac
+    - .m4a
+    - .ogg
+    - .wma
+
+  # Audio encoding presets
+  presets:
+    music:
+      bitrate: "128k"
+      application: "audio"
+      cutoff: null
+      channels: null
+      description: "Standard music quality"
+    
+    audiobook:
+      bitrate: "64k"          # Upgraded from 32k to audiobook_quality level
+      application: "voip"     # Optimized for speech
+      cutoff: null           # No frequency cutoff - preserve full range
+      channels: "1"          # Mono for most audiobooks
+      description: "High quality mono audiobooks"
+    
+    audiobook_quality:
+      bitrate: "64k"
+      application: "voip"
+      cutoff: null
+      channels: "1"
+      description: "High quality mono audiobooks (same as audiobook)"
+    
+    audiobook_stereo:
+      bitrate: "96k"          # Better quality for stereo (upgraded from 48k)
+      application: "voip"
+      cutoff: null           # No frequency cutoff - preserve full range
+      channels: null         # Keep original channels
+      description: "High quality stereo audiobooks"
+    
+    audiobook_stereo_quality:
+      bitrate: "96k"
+      application: "voip"
+      cutoff: null
+      channels: null
+      description: "High quality stereo audiobooks (same as audiobook_stereo)"
+    
+    high:
+      bitrate: "192k"
+      application: "audio"
+      cutoff: null
+      channels: null
+      description: "High quality music"
+    
+    low:
+      bitrate: "96k"
+      application: "audio"
+      cutoff: null
+      channels: null
+      description: "Lower quality for space saving"
+
+video:
+  # Supported video file extensions
+  extensions:
+    - .mp4
+    - .mkv
+    - .avi
+    - .mov
+    - .wmv
+    - .flv
+    - .webm
+    - .m4v
+
+  # Video encoding presets
+  presets:
+    default:
+      crf: 24
+      codec: "libx264"
+      preset: "medium"
+      description: "Balanced quality and encoding speed"
+    
+    high_quality:
+      crf: 18
+      codec: "libx264"
+      preset: "slow"
+      description: "High quality, slower encoding"
+    
+    fast:
+      crf: 26
+      codec: "libx264"
+      preset: "fast"
+      description: "Faster encoding, slightly lower quality"
+    
+    gpu:
+      crf: 24
+      codec: "h264_nvenc"  # NVIDIA GPU encoding
+      preset: "medium"
+      description: "GPU-accelerated encoding"
+
+# Global settings
+global:
+  # Default number of worker threads (null = auto-detect)
+  default_workers: null
+  
+  # Logging levels: DEBUG, INFO, WARNING, ERROR
+  log_level: "INFO"
+  
+  # Create backup files before replacing originals
+  create_backups: true
+  
+  # Remove backup files after successful conversion
+  # Options: "never", "immediate", "session_end", "on_success"
+  cleanup_backups: "on_success"
+  
+  # Keep backups for a certain number of days (0 = delete immediately)
+  backup_retention_days: 0

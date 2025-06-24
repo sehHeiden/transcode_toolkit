@@ -1,4 +1,5 @@
 """video.estimate – rough H.265 size-saving estimator."""
+
 from __future__ import annotations
 import csv
 import json
@@ -17,6 +18,7 @@ BITRATE_LIMITS: Dict[int, int] = {
 VIDEO_EXTS = {".mkv", ".mp4", ".mov", ".avi", ".wmv"}
 LOG = logging.getLogger("video-est")
 
+
 # ──────────────────────────────────────────────────────────────────────────────
 def _height_category(h: int) -> int:
     for ref in sorted(BITRATE_LIMITS):
@@ -27,18 +29,27 @@ def _height_category(h: int) -> int:
 
 def _probe(path: Path) -> Dict[str, Any]:
     cmd = [
-        "ffprobe", "-v", "quiet", "-print_format", "json",
-        "-show_entries", "format=duration,size,bit_rate",
-        "-select_streams", "v:0",
-        "-show_entries", "stream=height",
+        "ffprobe",
+        "-v",
+        "quiet",
+        "-print_format",
+        "json",
+        "-show_entries",
+        "format=duration,size,bit_rate",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=height",
         str(path),
     ]
-    data = json.loads(subprocess.run(cmd, capture_output=True, text=True, check=True).stdout)
+    data = json.loads(
+        subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
+    )
     fmt, st = data["format"], data["streams"][0]
     return {
         "duration": float(fmt.get("duration", 0.0)),
-        "height":   int(st.get("height", 1080)),
-        "size":     int(fmt.get("size", path.stat().st_size)),
+        "height": int(st.get("height", 1080)),
+        "size": int(fmt.get("size", path.stat().st_size)),
     }
 
 
@@ -67,17 +78,17 @@ def print_summary(rows, *, csv_path: str | None = None) -> None:
     diff = cur - new
     pct = 0 if cur == 0 else 100 * (diff / cur)
     print(f"Video files analysed : {len(rows):,}")
-    print(f"Current size         : {cur/2**30:.2f} GiB")
-    print(f"Estimated HEVC       : {new/2**30:.2f} GiB")
-    print(f"Potential saving     : {diff/2**20:.1f} MiB  ({pct:.1f} %)")
+    print(f"Current size         : {cur / 2**30:.2f} GiB")
+    print(f"Estimated HEVC       : {new / 2**30:.2f} GiB")
+    print(f"Potential saving     : {diff / 2**20:.1f} MiB  ({pct:.1f} %)")
 
     if csv_path:
-        csv_path = Path(csv_path)
-        csv_path.parent.mkdir(parents=True, exist_ok=True)
-        with csv_path.open("w", newline="") as fh:
+        csv_path_obj = Path(csv_path)
+        csv_path_obj.parent.mkdir(parents=True, exist_ok=True)
+        with csv_path_obj.open("w", newline="") as fh:
             wr = csv.writer(fh)
             wr.writerow(["file", "current_bytes", "estimated_bytes", "saving_bytes"])
             for p, c, e in rows:
                 wr.writerow([p, c, e, c - e])
             wr.writerow(["TOTAL", cur, new, diff])
-        print("CSV report →", csv_path)
+        print("CSV report →", csv_path_obj)
