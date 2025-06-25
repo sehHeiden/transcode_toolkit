@@ -1,14 +1,15 @@
 """video.estimate – rough H.265 size-saving estimator."""
 
 from __future__ import annotations
+
 import csv
 import json
 import logging
 import subprocess
 from pathlib import Path
-from typing import Dict, Any, List, Tuple
+from typing import Any
 
-BITRATE_LIMITS: Dict[int, int] = {
+BITRATE_LIMITS: dict[int, int] = {
     480: 2_500_000,
     720: 4_000_000,
     1080: 8_000_000,
@@ -27,7 +28,7 @@ def _height_category(h: int) -> int:
     return 2160
 
 
-def _probe(path: Path) -> Dict[str, Any]:
+def _probe(path: Path) -> dict[str, Any]:
     cmd = [
         "ffprobe",
         "-v",
@@ -43,7 +44,14 @@ def _probe(path: Path) -> Dict[str, Any]:
         str(path),
     ]
     data = json.loads(
-        subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
+        subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True,
+            encoding="utf-8",
+            errors="replace",
+        ).stdout
     )
     fmt, st = data["format"], data["streams"][0]
     return {
@@ -53,13 +61,13 @@ def _probe(path: Path) -> Dict[str, Any]:
     }
 
 
-def _estimate(meta: Dict[str, Any]) -> int:
+def _estimate(meta: dict[str, Any]) -> int:
     target_br = BITRATE_LIMITS[_height_category(meta["height"])]
     return int(meta["duration"] * target_br / 8)
 
 
-def analyse(root: Path) -> List[Tuple[Path, int, int]]:
-    rows: List[Tuple[Path, int, int]] = []
+def analyse(root: Path) -> list[tuple[Path, int, int]]:
+    rows: list[tuple[Path, int, int]] = []
     for p in root.rglob("*"):
         if p.suffix.lower() not in VIDEO_EXTS:
             continue

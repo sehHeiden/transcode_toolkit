@@ -1,13 +1,17 @@
 """Enhanced configuration management."""
 
 from __future__ import annotations
+
 import logging
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Dict, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 # Import the existing config system and extend it
-from config import MediaToolkitConfig, get_config as _get_global_config
+from config import MediaToolkitConfig
+from config import get_config as _get_global_config
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 LOG = logging.getLogger(__name__)
 
@@ -18,10 +22,10 @@ T = TypeVar("T")
 class ProcessingOptions:
     """Processing options that can override configuration."""
 
-    create_backups: Optional[bool] = None
-    cleanup_backups: Optional[str] = None
-    workers: Optional[int] = None
-    timeout: Optional[int] = None
+    create_backups: bool | None = None
+    cleanup_backups: str | None = None
+    workers: int | None = None
+    timeout: int | None = None
     dry_run: bool = False
     verbose: bool = False
 
@@ -29,14 +33,10 @@ class ProcessingOptions:
 class ConfigManager:
     """Enhanced configuration manager with context support."""
 
-    def __init__(self, config_path: Optional[Path] = None):
-        self._config = (
-            MediaToolkitConfig.load_from_file(config_path)
-            if config_path
-            else _get_global_config()
-        )
-        self._overrides: Dict[str, Any] = {}
-        self._context_stack: list[Dict[str, Any]] = []
+    def __init__(self, config_path: Path | None = None) -> None:
+        self._config = MediaToolkitConfig.load_from_file(config_path) if config_path else _get_global_config()
+        self._overrides: dict[str, Any] = {}
+        self._context_stack: list[dict[str, Any]] = []
 
     @property
     def config(self) -> MediaToolkitConfig:
@@ -64,11 +64,7 @@ class ConfigManager:
         """Set a temporary configuration override."""
         self._overrides[key_path] = value
 
-    def clear_overrides(self) -> None:
-        """Clear all configuration overrides."""
-        self._overrides.clear()
-
-    def push_context(self, overrides: Dict[str, Any]) -> None:
+    def push_context(self, overrides: dict[str, Any]) -> None:
         """Push a new configuration context."""
         self._context_stack.append(self._overrides.copy())
         self._overrides.update(overrides)
@@ -80,7 +76,7 @@ class ConfigManager:
 
     def apply_processing_options(self, options: ProcessingOptions) -> None:
         """Apply processing options as configuration overrides."""
-        overrides: Dict[str, Any] = {}
+        overrides: dict[str, Any] = {}
 
         if options.create_backups is not None:
             overrides["global_.create_backups"] = options.create_backups
@@ -96,7 +92,7 @@ class ConfigManager:
 class ConfigContext:
     """Context manager for temporary configuration changes."""
 
-    def __init__(self, config_manager: ConfigManager, overrides: Dict[str, Any]):
+    def __init__(self, config_manager: ConfigManager, overrides: dict[str, Any]) -> None:
         self.config_manager = config_manager
         self.overrides = overrides
 
@@ -106,12 +102,6 @@ class ConfigContext:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.config_manager.pop_context()
-
-
-# Extend the existing config system
-def get_config_manager(config_path: Optional[Path] = None) -> ConfigManager:
-    """Get a configuration manager instance."""
-    return ConfigManager(config_path)
 
 
 def with_config_overrides(config_manager: ConfigManager, **overrides) -> ConfigContext:

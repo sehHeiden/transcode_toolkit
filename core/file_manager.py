@@ -1,14 +1,18 @@
 """Enhanced file and backup management."""
 
 from __future__ import annotations
+
 import logging
 import shutil
 import time
 from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Any
+
 from .base import ProcessingError
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 LOG = logging.getLogger(__name__)
 
@@ -17,8 +21,6 @@ class BackupStrategy(Enum):
     """Backup creation strategies."""
 
     NEVER = "never"
-    IMMEDIATE = "immediate"
-    SESSION_END = "session_end"
     ON_SUCCESS = "on_success"
 
 
@@ -28,8 +30,8 @@ class FileOperation:
 
     operation_type: str
     source_path: Path
-    backup_path: Optional[Path] = None
-    target_path: Optional[Path] = None
+    backup_path: Path | None = None
+    target_path: Path | None = None
     success: bool = False
     timestamp: float = 0.0
 
@@ -44,14 +46,12 @@ class FileManager:
     def __init__(
         self,
         backup_strategy: BackupStrategy = BackupStrategy.ON_SUCCESS,
-        retention_days: int = 0,
-    ):
+    ) -> None:
         self.backup_strategy = backup_strategy
-        self.retention_days = retention_days
-        self.session_operations: List[FileOperation] = []
-        self.session_backups: Set[Path] = set()
+        self.session_operations: list[FileOperation] = []
+        self.session_backups: set[Path] = set()
 
-    def create_backup(self, file_path: Path) -> Optional[Path]:
+    def create_backup(self, file_path: Path) -> Path | None:
         """Create a backup of the file."""
         if self.backup_strategy == BackupStrategy.NEVER:
             return None
@@ -80,14 +80,11 @@ class FileManager:
             return backup_path
 
         except Exception as e:
-            LOG.error(f"Failed to create backup for {file_path}: {e}")
-            raise ProcessingError(
-                f"Backup creation failed: {e}", file_path=file_path, cause=e
-            )
+            LOG.exception(f"Failed to create backup for {file_path}: {e}")
+            msg = f"Backup creation failed: {e}"
+            raise ProcessingError(msg, file_path=file_path, cause=e)
 
-    def atomic_replace(
-        self, source_path: Path, temp_path: Path, create_backup: bool = True
-    ) -> FileOperation:
+    def atomic_replace(self, source_path: Path, temp_path: Path, create_backup: bool = True) -> FileOperation:
         """Atomically replace a file with proper backup handling."""
         backup_path = None
 
@@ -105,9 +102,7 @@ class FileManager:
 
             # Move temp file to final location
             final_path = (
-                source_path.with_suffix(".opus")
-                if source_path.suffix.lower() not in {".opus"}
-                else source_path
+                source_path.with_suffix(".opus") if source_path.suffix.lower() not in {".opus"} else source_path
             )
             shutil.move(temp_path, final_path)
 
@@ -120,12 +115,7 @@ class FileManager:
             )
             self.session_operations.append(operation)
 
-            # Handle immediate backup cleanup
-            if backup_path and self.backup_strategy in {
-                BackupStrategy.IMMEDIATE,
-                BackupStrategy.ON_SUCCESS,
-            }:
-                self._cleanup_backup(backup_path)
+            # Backup cleanup is now handled only at session end for ON_SUCCESS strategy
 
             LOG.debug(f"Atomically replaced {source_path} -> {final_path}")
             return operation
@@ -136,11 +126,9 @@ class FileManager:
                 try:
                     if not source_path.exists():
                         shutil.move(backup_path, source_path)
-                        LOG.info(
-                            f"Restored backup after failed replacement: {source_path}"
-                        )
+                        LOG.info(f"Restored backup after failed replacement: {source_path}")
                 except Exception as restore_error:
-                    LOG.error(f"Failed to restore backup: {restore_error}")
+                    LOG.exception(f"Failed to restore backup: {restore_error}")
 
             operation = FileOperation(
                 operation_type="file_replace",
@@ -150,9 +138,8 @@ class FileManager:
             )
             self.session_operations.append(operation)
 
-            raise ProcessingError(
-                f"Atomic file replacement failed: {e}", file_path=source_path, cause=e
-            )
+            msg = f"Atomic file replacement failed: {e}"
+            raise ProcessingError(msg, file_path=source_path, cause=e)
 
     def _cleanup_backup(self, backup_path: Path) -> None:
         """Remove a backup file."""
@@ -166,16 +153,11 @@ class FileManager:
 
     def cleanup_session_backups(self) -> int:
         """Clean up all backups from this session based on strategy."""
-        if self.backup_strategy not in {
-            BackupStrategy.SESSION_END,
-            BackupStrategy.ON_SUCCESS,
-        }:
+        if self.backup_strategy != BackupStrategy.ON_SUCCESS:
             return 0
 
         cleaned_count = 0
-        successful_operations = [
-            op for op in self.session_operations if op.success and op.backup_path
-        ]
+        successful_operations = [op for op in self.session_operations if op.success and op.backup_path]
 
         for operation in successful_operations:
             if operation.backup_path and operation.backup_path in self.session_backups:
@@ -185,33 +167,7 @@ class FileManager:
         LOG.info(f"Session cleanup: removed {cleaned_count} backup files")
         return cleaned_count
 
-    def cleanup_old_backups(self, directory: Path) -> int:
-        """Clean up old backup files based on retention policy."""
-        if self.retention_days <= 0:
-            return 0
-
-        retention_seconds = self.retention_days * 24 * 60 * 60
-        current_time = time.time()
-        cleaned_count = 0
-
-        # Find all .bak files in the directory tree
-        backup_files = list(directory.rglob("*.bak"))
-
-        for backup_file in backup_files:
-            try:
-                file_age = current_time - backup_file.stat().st_mtime
-                if file_age > retention_seconds:
-                    backup_file.unlink()
-                    cleaned_count += 1
-                    LOG.info(
-                        f"Removed old backup (age: {file_age / 86400:.1f} days): {backup_file}"
-                    )
-            except Exception as e:
-                LOG.warning(f"Failed to check/remove old backup {backup_file}: {e}")
-
-        return cleaned_count
-
-    def get_session_summary(self) -> Dict[str, Any]:
+    def get_session_summary(self) -> dict[str, Any]:
         """Get summary of file operations in this session."""
         successful_ops = [op for op in self.session_operations if op.success]
         failed_ops = [op for op in self.session_operations if not op.success]
@@ -222,21 +178,5 @@ class FileManager:
             "failed_operations": len(failed_ops),
             "backups_created": len(self.session_backups),
             "backup_strategy": self.backup_strategy.value,
-            "retention_days": self.retention_days,
             "operations": self.session_operations,
         }
-
-    def force_cleanup_all_backups(self, directory: Path) -> int:
-        """Force removal of all .bak files in directory (emergency cleanup)."""
-        backup_files = list(directory.rglob("*.bak"))
-        cleaned_count = 0
-
-        for backup_file in backup_files:
-            try:
-                backup_file.unlink()
-                cleaned_count += 1
-                LOG.info(f"Force removed backup: {backup_file}")
-            except Exception as e:
-                LOG.warning(f"Failed to force remove backup {backup_file}: {e}")
-
-        return cleaned_count

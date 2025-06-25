@@ -39,16 +39,16 @@ transcode_toolkit/
 ## Quick start (uv)
 
 ```bash
-# 1 – create virtual env & lock file
+# 1 – create virtual env & lock file
 aud init                 # generates .venv + pyproject.toml + uv.lock
 
-# 2 – install runtime dependencies
+# 2 – install runtime dependencies
 uv sync                  # identical to 'uv pip install -r'
 
-# 3 – run tests
+# 3 – run tests
 uv run pytest -q
 
-# 4 – explore CLI
+# 4 – explore CLI
 uv run python media_toolkit.py -h
 ```
 
@@ -102,7 +102,7 @@ uv run python media_toolkit.py audio estimate  E:\Audiobooks --mode audiobook --
 
 ---
 
-## Building a standalone Windows EXE (Nuitka)
+## Building a standalone Windows EXE (Nuitka)
 
 ```powershell
 uv add nuitka zstandard ninja          # one‑time, dev‑only
@@ -125,4 +125,4 @@ Result: `dist\media_toolkit.exe` – portable, GPU‑enabled.
 
 * Implement real **blur/VMAF** analysis in `video/blur_quality.py`.
 * Add **speech/music classifier** in `audio/opus_quality.py`.
-* Write GitHub Actions workflow to build Nuitka artefacts on every tag.
+* Write GitHub Actions workflow to build Nuitka artefacts on every tag.

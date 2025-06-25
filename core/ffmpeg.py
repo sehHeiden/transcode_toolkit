@@ -1,14 +1,19 @@
 """FFmpeg integration and utilities."""
 
 from __future__ import annotations
+
 import json
 import logging
 import shutil
 import subprocess
 import time
-from pathlib import Path
-from typing import Dict, List, Optional, Any, Callable
+from typing import TYPE_CHECKING, Any
+
 from .base import ProcessingError
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from pathlib import Path
 
 LOG = logging.getLogger(__name__)
 
@@ -19,10 +24,10 @@ class FFmpegError(ProcessingError):
     def __init__(
         self,
         message: str,
-        command: Optional[List[str]] = None,
-        return_code: Optional[int] = None,
+        command: list[str] | None = None,
+        return_code: int | None = None,
         **kwargs,
-    ):
+    ) -> None:
         super().__init__(message, **kwargs)
         self.command = command
         self.return_code = return_code
@@ -47,9 +52,7 @@ class FFmpegProbe:
             raise FFmpegError(error_msg)
 
     @staticmethod
-    def probe_media(
-        file_path: Path, stream_type: Optional[str] = None
-    ) -> Dict[str, Any]:
+    def probe_media(file_path: Path, stream_type: str | None = None) -> dict[str, Any]:
         """Probe media file for metadata."""
         FFmpegProbe.check_availability()
 
@@ -70,37 +73,42 @@ class FFmpegProbe:
 
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True, check=True, timeout=30
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=30,
+                encoding="utf-8",
+                errors="replace",
             )
-            data = json.loads(result.stdout)
-            return data
+            return json.loads(result.stdout)
         except subprocess.CalledProcessError as e:
+            msg = f"ffprobe failed for {file_path}: {e.stderr or e.stdout}"
             raise FFmpegError(
-                f"ffprobe failed for {file_path}: {e.stderr or e.stdout}",
+                msg,
                 command=cmd,
                 return_code=e.returncode,
                 file_path=file_path,
             )
         except subprocess.TimeoutExpired:
-            raise FFmpegError(
-                f"ffprobe timed out for {file_path}", command=cmd, file_path=file_path
-            )
+            msg = f"ffprobe timed out for {file_path}"
+            raise FFmpegError(msg, command=cmd, file_path=file_path)
         except json.JSONDecodeError as e:
+            msg = f"Invalid JSON from ffprobe for {file_path}: {e}"
             raise FFmpegError(
-                f"Invalid JSON from ffprobe for {file_path}: {e}",
+                msg,
                 command=cmd,
                 file_path=file_path,
             )
 
     @staticmethod
-    def get_audio_info(file_path: Path) -> Dict[str, Any]:
+    def get_audio_info(file_path: Path) -> dict[str, Any]:
         """Get audio stream information."""
         data = FFmpegProbe.probe_media(file_path, "a")
 
         if not data.get("streams"):
-            raise FFmpegError(
-                f"No audio streams found in {file_path}", file_path=file_path
-            )
+            msg = f"No audio streams found in {file_path}"
+            raise FFmpegError(msg, file_path=file_path)
 
         stream = data["streams"][0]
         format_info = data.get("format", {})
@@ -115,14 +123,87 @@ class FFmpegProbe:
         }
 
     @staticmethod
-    def get_video_info(file_path: Path) -> Dict[str, Any]:
+    def estimate_snr(file_path: Path, audio_info: dict[str, Any] | None = None) -> float:
+        """
+        Estimate Signal-to-Noise Ratio based on codec and bitrate.
+
+        Args:
+            file_path: Path to audio file
+            audio_info: Pre-computed audio info (optional)
+
+        Returns:
+            Estimated SNR in dB
+
+        """
+        if audio_info is None:
+            try:
+                audio_info = FFmpegProbe.get_audio_info(file_path)
+            except Exception as e:
+                LOG.warning(f"Failed to get audio info for {file_path}: {e}")
+                return 60.0  # Conservative default
+
+        codec = audio_info.get("codec", "").lower()
+        bitrate = audio_info.get("bitrate")
+
+        # Convert bitrate to int if it's a string
+        if bitrate and isinstance(bitrate, str):
+            try:
+                bitrate = int(bitrate)
+            except ValueError:
+                bitrate = None
+        elif bitrate:
+            bitrate = int(bitrate)
+
+        # Estimate SNR based on codec and bitrate
+        if codec in ["flac", "alac", "wav", "aiff"]:
+            return 96.0  # 16-bit lossless theoretical maximum
+        if codec in ["dsd", "dsf", "dff"]:
+            return 120.0  # DSD has very high SNR
+        if codec == "mp3":
+            if bitrate and bitrate >= 320000:
+                return 85.0  # High quality MP3
+            if bitrate and bitrate >= 192000:
+                return 75.0  # Good quality MP3
+            if bitrate and bitrate >= 128000:
+                return 65.0  # Standard quality MP3
+            return 55.0  # Lower quality MP3
+        if codec in ["aac", "m4a"]:
+            if bitrate and bitrate >= 256000:
+                return 80.0  # High quality AAC
+            if bitrate and bitrate >= 128000:
+                return 70.0  # Good quality AAC
+            if bitrate and bitrate >= 96000:
+                return 60.0  # Standard quality AAC
+            return 50.0  # Lower quality AAC
+        if codec in ["opus", "ogg", "vorbis"]:
+            if bitrate and bitrate >= 192000:
+                return 85.0  # High quality Opus/Ogg
+            if bitrate and bitrate >= 128000:
+                return 75.0  # Good quality Opus/Ogg
+            if bitrate and bitrate >= 96000:
+                return 65.0  # Standard quality Opus/Ogg
+            return 55.0  # Lower quality Opus/Ogg
+        if codec in ["wma", "wmv"]:
+            if bitrate and bitrate >= 192000:
+                return 75.0  # High quality WMA
+            if bitrate and bitrate >= 128000:
+                return 65.0  # Good quality WMA
+            return 55.0  # Lower quality WMA
+        # Unknown codec - conservative estimate
+        if bitrate and bitrate >= 256000:
+            return 70.0
+        if bitrate and bitrate >= 128000:
+            return 60.0
+        return 50.0
+
+    @staticmethod
+    def get_video_info(file_path: Path) -> dict[str, Any]:
         """Get video stream information."""
         data = FFmpegProbe.probe_media(file_path, "v")
 
         if not data.get("streams"):
-            raise FFmpegError(
-                f"No video streams found in {file_path}", file_path=file_path
-            )
+            msg = f"No video streams found in {file_path}"
+            raise FFmpegError(msg, file_path=file_path)
 
         stream = data["streams"][0]
         format_info = data.get("format", {})
@@ -141,14 +222,14 @@ class FFmpegProbe:
 class FFmpegProcessor:
     """FFmpeg command executor with enhanced error handling."""
 
-    def __init__(self, timeout: int = 300):
+    def __init__(self, timeout: int = 300) -> None:
         self.timeout = timeout
 
     def run_command(
         self,
-        command: List[str],
-        file_path: Optional[Path] = None,
-        progress_callback: Optional[Callable] = None,
+        command: list[str],
+        file_path: Path | None = None,
+        progress_callback: Callable | None = None,
     ) -> subprocess.CompletedProcess:
         """Run FFmpeg command with proper error handling."""
         FFmpegProbe.check_availability()
@@ -164,6 +245,8 @@ class FFmpegProcessor:
                 text=True,
                 timeout=self.timeout,
                 check=False,  # We'll handle return code ourselves
+                encoding="utf-8",
+                errors="replace",
             )
 
             processing_time = time.time() - start_time
@@ -184,16 +267,18 @@ class FFmpegProcessor:
             return result
 
         except subprocess.TimeoutExpired:
+            msg = f"FFmpeg command timed out after {self.timeout}s"
             raise FFmpegError(
-                f"FFmpeg command timed out after {self.timeout}s",
+                msg,
                 command=command,
                 file_path=file_path,
             )
         except Exception as e:
             if isinstance(e, FFmpegError):
                 raise
+            msg = f"Unexpected error running FFmpeg: {e}"
             raise FFmpegError(
-                f"Unexpected error running FFmpeg: {e}",
+                msg,
                 command=command,
                 file_path=file_path,
                 cause=e,
@@ -206,7 +291,7 @@ class FFmpegProcessor:
         codec: str = "libopus",
         bitrate: str = "128k",
         **kwargs,
-    ) -> List[str]:
+    ) -> list[str]:
         """Build FFmpeg command for audio transcoding."""
         cmd = [
             "ffmpeg",
@@ -242,7 +327,7 @@ class FFmpegProcessor:
         crf: int = 24,
         preset: str = "medium",
         **kwargs,
-    ) -> List[str]:
+    ) -> list[str]:
         """Build FFmpeg command for video transcoding."""
         cmd = [
             "ffmpeg",
@@ -256,7 +341,7 @@ class FFmpegProcessor:
         ]
 
         # Video encoding parameters
-        if "gpu" in kwargs and kwargs["gpu"]:
+        if kwargs.get("gpu"):
             cmd.extend(["-c:v", "hevc_nvenc", "-preset", "p5", "-cq", str(crf)])
         else:
             cmd.extend(["-c:v", codec, "-preset", preset])

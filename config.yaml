@@ -5,6 +5,45 @@ audio:
   # Size reduction ratio threshold - keep re-encode only if ≥ 5% smaller
   size_keep_ratio: 0.95
   
+  # Quality analysis settings (user configurable)
+  quality_thresholds:
+    small_folder_files: 3        # Files ≤ this = analyze all
+    medium_folder_files: 20      # Files ≤ this = skip first/last
+    min_saving_percent: 5        # Don't convert if savings < this %
+    
+  # SNR sampling configuration
+  sampling:
+    edge_skip_percent: 10        # Skip this % from folder edges
+    min_sample_count: 5          # Minimum samples in large folders
+    sample_percentage: 0.2       # Sample this % of files (20%)
+    
+  # Codec quality estimates (user can adjust based on preferences)
+  codec_snr_estimates:
+    mp3:
+      high_quality_bitrate: 320000
+      good_quality_bitrate: 192000
+      standard_quality_bitrate: 128000
+      high_snr: 85.0
+      good_snr: 75.0
+      standard_snr: 65.0
+      low_snr: 55.0
+    aac:
+      high_quality_bitrate: 256000
+      good_quality_bitrate: 128000
+      standard_quality_bitrate: 96000
+      high_snr: 80.0
+      good_snr: 70.0
+      standard_snr: 60.0
+      low_snr: 50.0
+    opus:
+      high_quality_bitrate: 192000
+      good_quality_bitrate: 128000
+      standard_quality_bitrate: 96000
+      high_snr: 85.0
+      good_snr: 75.0
+      standard_snr: 65.0
+      low_snr: 55.0
+  
   # Supported audio file extensions
   extensions:
     - .flac
@@ -23,13 +62,17 @@ audio:
       cutoff: null
       channels: null
       description: "Standard music quality"
+      min_snr_db: 70.0               # Minimum SNR for full bitrate
+      snr_bitrate_scale: true        # Enable SNR scaling
     
     audiobook:
-      bitrate: "64k"          # Upgraded from 32k to audiobook_quality level
+      bitrate: "64k"
       application: "voip"     # Optimized for speech
       cutoff: null           # No frequency cutoff - preserve full range
       channels: "1"          # Mono for most audiobooks
       description: "High quality mono audiobooks"
+      min_snr_db: 50.0       # Lower threshold for voice content
+      snr_bitrate_scale: true
     
     audiobook_stereo:
       bitrate: "96k"          # Better quality for stereo (upgraded from 48k)
@@ -37,6 +80,8 @@ audio:
       cutoff: null           # No frequency cutoff - preserve full range
       channels: null         # Keep original channels
       description: "High quality stereo audiobooks"
+      min_snr_db: 50.0       # Lower threshold for voice content
+      snr_bitrate_scale: true
     
     high:
       bitrate: "192k"
@@ -44,6 +89,8 @@ audio:
       cutoff: null
       channels: null
       description: "High quality music"
+      min_snr_db: 75.0       # Higher threshold for high quality
+      snr_bitrate_scale: true
     
     low:
       bitrate: "96k"
@@ -51,6 +98,8 @@ audio:
       cutoff: null
       channels: null
       description: "Lower quality for space saving"
+      min_snr_db: 60.0       # Moderate threshold for low quality preset
+      snr_bitrate_scale: true
 
 video:
   # Supported video file extensions
@@ -104,8 +153,5 @@ global:
   create_backups: true
   
   # Remove backup files after successful conversion
-  # Options: "never", "immediate", "session_end", "on_success"
+  # Options: "never", "on_success"
   cleanup_backups: "on_success"
-  
-  # Keep backups for a certain number of days (0 = delete immediately)
-  backup_retention_days: 0

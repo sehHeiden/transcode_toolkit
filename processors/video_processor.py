@@ -1,13 +1,12 @@
 """Video processing implementation."""
 
 from __future__ import annotations
+
 import logging
 import tempfile
 from pathlib import Path
-from typing import Dict, Any, Optional
 
-from core import MediaProcessor, ProcessingResult, ProcessingStatus
-from core import FileManager, BackupStrategy
+from core import BackupStrategy, FileManager, MediaProcessor, ProcessingResult, ProcessingStatus
 from video import transcode
 
 LOG = logging.getLogger(__name__)
@@ -16,7 +15,7 @@ LOG = logging.getLogger(__name__)
 class VideoProcessor(MediaProcessor):
     """Video processor for HEVC transcoding."""
 
-    def __init__(self, file_manager: Optional[FileManager] = None):
+    def __init__(self, file_manager: FileManager | None = None) -> None:
         super().__init__("VideoProcessor")
         self.file_manager = file_manager or FileManager(BackupStrategy.ON_SUCCESS)
         self.video_extensions = {
@@ -40,8 +39,8 @@ class VideoProcessor(MediaProcessor):
             return False
 
         try:
-            import subprocess
             import json
+            import subprocess
 
             # Get video metadata
             cmd = [
@@ -57,7 +56,14 @@ class VideoProcessor(MediaProcessor):
                 str(file_path),
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True,
+                encoding="utf-8",
+                errors="replace",
+            )
             data = json.loads(result.stdout)
 
             if not data.get("streams"):
@@ -96,9 +102,7 @@ class VideoProcessor(MediaProcessor):
                 temp_path = Path(tmp.name)
 
             # Transcode the video
-            success = transcode.transcode_video(
-                input_path=file_path, output_path=temp_path, crf=crf, gpu=gpu
-            )
+            success = transcode.transcode_video(input_path=file_path, output_path=temp_path, crf=crf, gpu=gpu)
 
             if not success:
                 temp_path.unlink(missing_ok=True)
@@ -137,79 +141,19 @@ class VideoProcessor(MediaProcessor):
                     original_size=original_size,
                     new_size=new_size,
                 )
-            else:
-                return ProcessingResult(
-                    source_file=file_path,
-                    status=ProcessingStatus.FAILED,
-                    message="Failed to replace original file",
-                    original_size=original_size,
-                    new_size=new_size,
-                )
+            return ProcessingResult(
+                source_file=file_path,
+                status=ProcessingStatus.FAILED,
+                message="Failed to replace original file",
+                original_size=original_size,
+                new_size=new_size,
+            )
 
         except Exception as e:
-            LOG.error(f"Error processing {file_path}: {e}")
+            LOG.exception(f"Error processing {file_path}: {e}")
             return ProcessingResult(
                 source_file=file_path,
                 status=ProcessingStatus.ERROR,
                 message=str(e),
                 original_size=original_size,
             )
-
-
-class VideoEstimator:
-    """Video size estimation utility."""
-
-    def __init__(self):
-        self.video_extensions = {
-            ".mp4",
-            ".mkv",
-            ".avi",
-            ".mov",
-            ".wmv",
-            ".flv",
-            ".webm",
-            ".m4v",
-        }
-
-    def estimate_size(self, file_path: Path, **kwargs) -> int:
-        """Estimate size after HEVC transcoding."""
-        from video import estimate
-
-        try:
-            meta = estimate._probe(file_path)
-            return estimate._estimate(meta)
-        except Exception as e:
-            LOG.warning(f"Failed to estimate size for {file_path}: {e}")
-            return file_path.stat().st_size  # Return original size as fallback
-
-    def estimate_directory(self, directory: Path, **kwargs) -> Dict[str, Any]:
-        """Estimate sizes for all videos in directory."""
-        from video import estimate
-
-        try:
-            rows = estimate.analyse(directory)
-
-            current_total = sum(row[1] for row in rows)
-            estimated_total = sum(row[2] for row in rows)
-            savings = current_total - estimated_total
-
-            return {
-                "files": len(rows),
-                "current_size": current_total,
-                "estimated_size": estimated_total,
-                "potential_savings": savings,
-                "savings_percent": (savings / current_total * 100)
-                if current_total > 0
-                else 0,
-                "details": rows,
-            }
-        except Exception as e:
-            LOG.error(f"Failed to estimate directory {directory}: {e}")
-            return {
-                "files": 0,
-                "current_size": 0,
-                "estimated_size": 0,
-                "potential_savings": 0,
-                "savings_percent": 0,
-                "details": [],
-            }

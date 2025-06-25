@@ -1,31 +1,35 @@
 """Audio processor implementation using the new core architecture."""
 
 from __future__ import annotations
+
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
-from typing import Any, Dict, List
+from typing import TYPE_CHECKING, Any
 
 import psutil
 from tqdm import tqdm
 
 from core import (
-    MediaProcessor,
-    ProcessingResult,
-    ProcessingStatus,
-    ProcessingError,
+    BackupStrategy,
+    ConfigManager,
+    FFmpegError,
     FFmpegProbe,
     FFmpegProcessor,
-    FFmpegError,
-    ConfigManager,
     FileManager,
-    BackupStrategy,
+    MediaProcessor,
+    ProcessingError,
+    ProcessingResult,
+    ProcessingStatus,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def get_safe_worker_count(configured_workers: int | None) -> int:
-    """Get a safe number of workers that doesn't overwhelm the system.
+    """
+    Get a safe number of workers that doesn't overwhelm the system.
 
     Uses psutil to properly differentiate between physical and logical cores,
     ensuring we don't use all physical cores to keep the system responsive.
@@ -35,6 +39,7 @@ def get_safe_worker_count(configured_workers: int | None) -> int:
 
     Returns:
         Safe number of workers that avoids using all physical cores
+
     """
     if configured_workers is not None and configured_workers > 0:
         return configured_workers
@@ -70,19 +75,16 @@ def get_safe_worker_count(configured_workers: int | None) -> int:
 class AudioProcessor(MediaProcessor):
     """Audio transcoding processor using Opus codec."""
 
-    def __init__(self, config_manager: ConfigManager):
+    def __init__(self, config_manager: ConfigManager) -> None:
         super().__init__("AudioProcessor")
         self.config_manager = config_manager
         self.ffmpeg = FFmpegProcessor()
 
         # Initialize file manager with backup strategy from config
-        backup_strategy_str = config_manager.get_value(
-            "global_.cleanup_backups", "on_success"
-        )
+        backup_strategy_str = config_manager.get_value("global_.cleanup_backups", "on_success")
         backup_strategy = BackupStrategy(backup_strategy_str)
-        retention_days = config_manager.get_value("global_.backup_retention_days", 0)
 
-        self.file_manager = FileManager(backup_strategy, retention_days)
+        self.file_manager = FileManager(backup_strategy)
 
     def can_process(self, file_path: Path) -> bool:
         """Check if file is a supported audio format."""
@@ -107,17 +109,13 @@ class AudioProcessor(MediaProcessor):
                             f"Will reprocess {file_path.name}: Opus {current_bps / 1000:.0f}k → {target_bps / 1000:.0f}k"
                         )
                         return True
-                    else:
-                        self.logger.info(
-                            f"Skipping {file_path.name}: Already optimal Opus ({current_bps / 1000:.0f}k vs target {target_bps / 1000:.0f}k)"
-                        )
-                        return False
-                else:
-                    # If bitrate is unknown, conservatively skip
                     self.logger.info(
-                        f"Skipping {file_path.name}: Already Opus format (bitrate unknown)"
+                        f"Skipping {file_path.name}: Already optimal Opus ({current_bps / 1000:.0f}k vs target {target_bps / 1000:.0f}k)"
                     )
                     return False
+                # If bitrate is unknown, conservatively skip
+                self.logger.info(f"Skipping {file_path.name}: Already Opus format (bitrate unknown)")
+                return False
 
             return True
 
@@ -125,9 +123,7 @@ class AudioProcessor(MediaProcessor):
             self.logger.warning(f"Could not analyze {file_path}: {e}")
             return False
 
-    def process_file(
-        self, file_path: Path, preset: str = "music", **kwargs
-    ) -> ProcessingResult:
+    def process_file(self, file_path: Path, preset: str = "music", **kwargs) -> ProcessingResult:
         """Process a single audio file."""
         start_time = time.time()
 
@@ -142,12 +138,15 @@ class AudioProcessor(MediaProcessor):
             # Create temporary output file
             temp_file = file_path.with_suffix(".tmp.opus")
 
+            # Determine effective bitrate using SNR-based intelligent limiting
+            effective_bitrate = self._calculate_effective_bitrate(file_path, audio_info, preset_config)
+
             # Build and run FFmpeg command
             command = self.ffmpeg.build_audio_command(
                 input_file=file_path,
                 output_file=temp_file,
                 codec="libopus",
-                bitrate=preset_config.bitrate,
+                bitrate=effective_bitrate,
                 application=preset_config.application,
                 cutoff=preset_config.cutoff,
                 channels=preset_config.channels,
@@ -161,7 +160,8 @@ class AudioProcessor(MediaProcessor):
 
             # Check output file
             if not temp_file.exists():
-                raise ProcessingError(f"Output file not created: {temp_file}")
+                msg = f"Output file not created: {temp_file}"
+                raise ProcessingError(msg)
 
             new_size = temp_file.stat().st_size
             size_ratio = self.config_manager.get_value("audio.size_keep_ratio", 0.95)
@@ -172,9 +172,7 @@ class AudioProcessor(MediaProcessor):
 
             if size_improvement or is_lossless:
                 # Replace original with transcoded version
-                create_backups = self.config_manager.get_value(
-                    "global_.create_backups", True
-                )
+                create_backups = self.config_manager.get_value("global_.create_backups", True)
                 operation = self.file_manager.atomic_replace(
                     source_path=file_path,
                     temp_path=temp_file,
@@ -197,25 +195,22 @@ class AudioProcessor(MediaProcessor):
                         "backup_created": operation.backup_path is not None,
                     },
                 )
-            else:
-                # Remove temporary file - no significant improvement
-                temp_file.unlink()
+            # Remove temporary file - no significant improvement
+            temp_file.unlink()
 
-                return ProcessingResult(
-                    source_file=file_path,
-                    status=ProcessingStatus.SKIPPED,
-                    message="No significant size reduction achieved",
-                    original_size=original_size,
-                    new_size=new_size,
-                    processing_time=processing_time,
-                    metadata={
-                        "preset": preset,
-                        "size_reduction_mb": (original_size - new_size) / (1024 * 1024),
-                        "size_improvement": (original_size - new_size)
-                        / original_size
-                        * 100,
-                    },
-                )
+            return ProcessingResult(
+                source_file=file_path,
+                status=ProcessingStatus.SKIPPED,
+                message="No significant size reduction achieved",
+                original_size=original_size,
+                new_size=new_size,
+                processing_time=processing_time,
+                metadata={
+                    "preset": preset,
+                    "size_reduction_mb": (original_size - new_size) / (1024 * 1024),
+                    "size_improvement": (original_size - new_size) / original_size * 100,
+                },
+            )
 
         except Exception as e:
             processing_time = time.time() - start_time
@@ -225,10 +220,7 @@ class AudioProcessor(MediaProcessor):
             if temp_file.exists():
                 temp_file.unlink(missing_ok=True)
 
-            if isinstance(e, (FFmpegError, ProcessingError)):
-                error_msg = str(e)
-            else:
-                error_msg = f"Unexpected error: {e}"
+            error_msg = str(e) if isinstance(e, (FFmpegError, ProcessingError)) else f"Unexpected error: {e}"
 
             return ProcessingResult(
                 source_file=file_path,
@@ -243,7 +235,7 @@ class AudioProcessor(MediaProcessor):
         directory: Path,
         recursive: bool = True,
         **kwargs,
-    ) -> List[ProcessingResult]:
+    ) -> list[ProcessingResult]:
         """Process all audio files in directory with multithreading."""
         # Extract parameters from kwargs
         preset = kwargs.pop("preset", "music")  # Remove from kwargs to avoid conflicts
@@ -251,26 +243,21 @@ class AudioProcessor(MediaProcessor):
 
         # Get worker count from config if not specified
         if max_workers is None:
-            configured_workers = self.config_manager.get_value(
-                "global_.default_workers"
-            )
+            configured_workers = self.config_manager.get_value("global_.default_workers")
             max_workers = get_safe_worker_count(configured_workers)
         else:
             # Even if specified, ensure it's safe
             max_workers = get_safe_worker_count(max_workers)
 
-        # Clean up old backups first
-        self.file_manager.cleanup_old_backups(directory)
+        # Note: Backup cleanup is now handled only at session end for successful operations
 
         # Get all compatible files
         pattern = "**/*" if recursive else "*"
-        files = list(
+        files = [
             f
             for f in directory.glob(pattern)
-            if f.is_file()
-            and self.can_process(f)
-            and self.should_process(f, preset=preset, **kwargs)
-        )
+            if f.is_file() and self.can_process(f) and self.should_process(f, preset=preset, **kwargs)
+        ]
 
         # Initialize progress bar with more details
         progress_bar = tqdm(
@@ -296,9 +283,7 @@ class AudioProcessor(MediaProcessor):
                 # Multi-threaded processing
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
                     future_to_file = {
-                        executor.submit(
-                            self.process_file, file_path, preset=preset, **kwargs
-                        ): file_path
+                        executor.submit(self.process_file, file_path, preset=preset, **kwargs): file_path
                         for file_path in files
                     }
 
@@ -309,19 +294,13 @@ class AudioProcessor(MediaProcessor):
                             results.append(result)
                             # Update description with completion status
                             if result.status == ProcessingStatus.SUCCESS:
-                                progress_bar.set_description(
-                                    f"✓ Completed {file_path.name}"
-                                )
+                                progress_bar.set_description(f"✓ Completed {file_path.name}")
                             elif result.status == ProcessingStatus.SKIPPED:
-                                progress_bar.set_description(
-                                    f"⏭ Skipped {file_path.name}"
-                                )
+                                progress_bar.set_description(f"⏭ Skipped {file_path.name}")
                             else:
-                                progress_bar.set_description(
-                                    f"✗ Error {file_path.name}"
-                                )
+                                progress_bar.set_description(f"✗ Error {file_path.name}")
                         except Exception as e:
-                            self.logger.error(f"Error processing {file_path}: {e}")
+                            self.logger.exception(f"Error processing {file_path}: {e}")
                             results.append(
                                 ProcessingResult(
                                     source_file=file_path,
@@ -349,75 +328,75 @@ class AudioProcessor(MediaProcessor):
 
         return results
 
+    def _calculate_effective_bitrate(self, file_path: Path, audio_info: dict[str, Any], preset_config) -> str:
+        """
+        Calculate effective bitrate using SNR-based intelligent limiting.
 
-class AudioEstimator:
-    """Audio size estimation utility."""
+        Args:
+            file_path: Path to the audio file
+            audio_info: Audio metadata from FFprobe
+            preset_config: AudioPreset configuration
 
-    def __init__(self, config_manager: ConfigManager):
-        self.config_manager = config_manager
-        self.logger = logging.getLogger(
-            f"{self.__class__.__module__}.{self.__class__.__name__}"
-        )
+        Returns:
+            Effective bitrate string (e.g., "128k")
 
-    def estimate_size(self, file_path: Path, preset: str = "music") -> int:
-        """Estimate the size after transcoding with given preset."""
-        try:
-            audio_info = FFmpegProbe.get_audio_info(file_path)
-            preset_config = self.config_manager.config.get_audio_preset(preset)
+        """
+        target_bitrate_bps = int(preset_config.bitrate.rstrip("k")) * 1000
 
-            # Convert bitrate to bits per second
-            target_bitrate = int(preset_config.bitrate.rstrip("k")) * 1000
+        # Check if SNR scaling is enabled and has a threshold
+        if not preset_config.snr_bitrate_scale or preset_config.min_snr_db is None:
+            # SNR scaling disabled - only apply input bitrate limit
+            if audio_info["bitrate"]:
+                input_bitrate_bps = int(audio_info["bitrate"])
+                if target_bitrate_bps > input_bitrate_bps:
+                    effective_bitrate = f"{input_bitrate_bps // 1000}k"
+                    self.logger.info(
+                        f"Limiting bitrate for {file_path.name}: {preset_config.bitrate} → {effective_bitrate} (input limit, SNR scaling disabled)"
+                    )
+                    return effective_bitrate
 
-            # Estimate: duration * bitrate / 8
-            estimated_size = int(audio_info["duration"] * target_bitrate / 8)
+            self.logger.debug(f"Using preset bitrate for {file_path.name}: {preset_config.bitrate}")
+            return preset_config.bitrate
 
-            return estimated_size
-        except Exception as e:
-            self.logger.warning(f"Could not estimate size for {file_path}: {e}")
-            return file_path.stat().st_size  # Return original size as fallback
+        # SNR scaling enabled - calculate effective bitrate
+        estimated_snr = FFmpegProbe.estimate_snr(file_path, audio_info)
+        self.logger.debug(f"Estimated SNR for {file_path.name}: {estimated_snr:.1f} dB")
 
-    def estimate_directory(self, directory: Path, **kwargs) -> Dict[str, Any]:
-        """Estimate sizes for all audio files in directory."""
-        audio_extensions = self.config_manager.get_value("audio.extensions", set())
+        # Calculate SNR-adjusted bitrate if below threshold
+        if estimated_snr < preset_config.min_snr_db:
+            # Scale down based on SNR ratio
+            snr_ratio = estimated_snr / preset_config.min_snr_db
+            snr_adjusted_bps = int(target_bitrate_bps * snr_ratio)
 
-        # Find all audio files
-        files = [
-            f
-            for f in directory.rglob("*")
-            if f.is_file() and f.suffix.lower() in audio_extensions
-        ]
+            # Apply minimum floor based on preset type
+            is_voice = preset_config.application in ["voip", "voice"]
+            min_bitrate_bps = 32000 if is_voice else 64000
+            snr_adjusted_bps = max(snr_adjusted_bps, min_bitrate_bps)
 
-        results = {}
+            limitation_reason = f"SNR-limited ({estimated_snr:.1f}dB < {preset_config.min_snr_db}dB)"
+        else:
+            # SNR sufficient for target bitrate
+            snr_adjusted_bps = target_bitrate_bps
+            limitation_reason = None
 
-        for preset_name in self.config_manager.config.list_audio_presets():
-            current_total = 0
-            estimated_total = 0
-            file_count = 0
+        # Apply input bitrate ceiling (don't upsample)
+        final_bitrate_bps = snr_adjusted_bps
+        if audio_info["bitrate"]:
+            input_bitrate_bps = int(audio_info["bitrate"])
+            if snr_adjusted_bps > input_bitrate_bps:
+                final_bitrate_bps = input_bitrate_bps
+                limitation_reason = f"input + {limitation_reason}" if limitation_reason else "input limit"
 
-            for file_path in files:
-                try:
-                    current_size = file_path.stat().st_size
-                    estimated_size = self.estimate_size(file_path, preset_name)
+        effective_bitrate = f"{final_bitrate_bps // 1000}k"
 
-                    current_total += current_size
-                    estimated_total += estimated_size
-                    file_count += 1
+        # Log decision
+        if limitation_reason:
+            self.logger.info(
+                f"Limiting bitrate for {file_path.name}: {preset_config.bitrate} → {effective_bitrate} ({limitation_reason})"
+            )
+        elif effective_bitrate != preset_config.bitrate:
+            self.logger.info(f"Using adjusted bitrate for {file_path.name}: {effective_bitrate}")
+        else:
+            self.logger.debug(f"Using preset bitrate for {file_path.name}: {preset_config.bitrate}")
 
-                except Exception as e:
-                    self.logger.warning(f"Error estimating {file_path}: {e}")
-
-            if file_count > 0:
-                savings = current_total - estimated_total
-                savings_percent = (
-                    (savings / current_total * 100) if current_total > 0 else 0
-                )
-
-                results[preset_name] = {
-                    "files": file_count,
-                    "current_size_mb": current_total / (1024 * 1024),
-                    "estimated_size_mb": estimated_total / (1024 * 1024),
-                    "savings_mb": savings / (1024 * 1024),
-                    "savings_percent": savings_percent,
-                }
-
-        return results
+        return effective_bitrate

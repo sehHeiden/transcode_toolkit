@@ -1,26 +1,28 @@
 """Main CLI interface for the media toolkit."""
 
 from __future__ import annotations
+
 import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import Optional
 
 from core import ConfigManager, ProcessingOptions, with_config_overrides
-from .commands import AudioCommands, VideoCommands, UtilityCommands
+
+from .commands import AudioCommands, UtilityCommands, VideoCommands
 
 
 class MediaToolkitCLI:
     """Main CLI interface with enhanced architecture."""
 
-    def __init__(self, config_path: Optional[Path] = None):
+    def __init__(self, config_path: Path | None = None) -> None:
         self.config_manager = ConfigManager(config_path)
         self.audio_commands = AudioCommands(self.config_manager)
         self.video_commands = VideoCommands(self.config_manager)
         self.utility_commands = UtilityCommands(self.config_manager)
 
-    def setup_logging(self, verbosity: int) -> None:
+    @staticmethod
+    def setup_logging(verbosity: int) -> None:
         """Setup logging based on verbosity level."""
         level_map = {
             0: logging.WARNING,
@@ -31,15 +33,9 @@ class MediaToolkitCLI:
         level = level_map.get(verbosity, logging.DEBUG)
 
         # Setup enhanced logging format
-        log_format = (
-            "%(levelname)s: %(name)s: %(message)s"
-            if verbosity >= 2
-            else "%(levelname)s: %(message)s"
-        )
+        log_format = "%(levelname)s: %(name)s: %(message)s" if verbosity >= 2 else "%(levelname)s: %(message)s"
 
-        logging.basicConfig(
-            level=level, format=log_format, handlers=[logging.StreamHandler(sys.stderr)]
-        )
+        logging.basicConfig(level=level, format=log_format, handlers=[logging.StreamHandler(sys.stderr)])
 
         # Set FFmpeg logs to higher level to reduce noise
         if verbosity < 2:
@@ -55,13 +51,13 @@ class MediaToolkitCLI:
 Examples:
   # Audio transcoding
   media-toolkit audio transcode /path/to/audio --preset audiobook
-  
+
   # Estimate sizes before transcoding
   media-toolkit audio estimate /path/to/audio --compare
-  
+
   # Video transcoding with GPU acceleration
   media-toolkit video transcode /path/to/video --gpu --crf 22
-  
+
   # Clean up backup files
   media-toolkit utils cleanup /path/to/media --force
             """,
@@ -85,9 +81,7 @@ Examples:
         )
 
         # Subcommands
-        subparsers = parser.add_subparsers(
-            dest="command", required=True, help="Available commands"
-        )
+        subparsers = parser.add_subparsers(dest="command", required=True, help="Available commands")
 
         # Add audio commands
         audio_parser = subparsers.add_parser("audio", help="Audio processing commands")
@@ -103,7 +97,8 @@ Examples:
 
         return parser
 
-    def create_processing_options(self, args: argparse.Namespace) -> ProcessingOptions:
+    @staticmethod
+    def create_processing_options(args: argparse.Namespace) -> ProcessingOptions:
         """Create processing options from CLI arguments."""
         return ProcessingOptions(
             create_backups=not getattr(args, "no_backups", False),  # Invert no_backups
@@ -114,7 +109,7 @@ Examples:
             verbose=getattr(args, "verbose", 0) > 0,
         )
 
-    def run(self, args: Optional[list[str]] = None) -> int:
+    def run(self, args: list[str] | None = None) -> int:
         """Run the CLI with given arguments."""
         parser = self.build_parser()
         parsed_args = parser.parse_args(args)
@@ -141,18 +136,17 @@ Examples:
                 # Route to appropriate command handler
                 if parsed_args.command == "audio":
                     return self.audio_commands.handle_command(parsed_args)
-                elif parsed_args.command == "video":
+                if parsed_args.command == "video":
                     return self.video_commands.handle_command(parsed_args)
-                elif parsed_args.command == "utils":
+                if parsed_args.command == "utils":
                     return self.utility_commands.handle_command(parsed_args)
-                else:
-                    parser.error(f"Unknown command: {parsed_args.command}")
+                parser.error(f"Unknown command: {parsed_args.command}")
 
         except KeyboardInterrupt:
             logging.getLogger(__name__).info("Operation cancelled by user")
             return 130  # Standard exit code for SIGINT
         except Exception as e:
-            logging.getLogger(__name__).error(f"Unexpected error: {e}")
+            logging.getLogger(__name__).exception(f"Unexpected error: {e}")
             if parsed_args.verbose >= 2:
                 import traceback
 

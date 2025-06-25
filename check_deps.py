@@ -6,7 +6,7 @@ import subprocess
 import sys
 
 
-def check_ffmpeg_installation():
+def check_ffmpeg_installation() -> bool:
     """Check if FFmpeg tools are available and suggest installation methods."""
     required = ["ffmpeg", "ffprobe"]
     missing = []
@@ -16,9 +16,7 @@ def check_ffmpeg_installation():
     for exe in required:
         if shutil.which(exe):
             try:
-                result = subprocess.run(
-                    [exe, "-version"], capture_output=True, text=True, timeout=5
-                )
+                result = subprocess.run([exe, "-version"], capture_output=True, text=True, timeout=5, check=False)
                 version_line = result.stdout.split("\n")[0]
                 print(f"✅ {exe}: {version_line}")
             except subprocess.TimeoutExpired:
@@ -50,28 +48,25 @@ def check_ffmpeg_installation():
         print("   • Or run this script again to check")
 
         return False
-    else:
-        print("\n✅ All FFmpeg tools are available!")
-        return True
+    print("\n✅ All FFmpeg tools are available!")
+    return True
 
 
-def check_python_environment():
+def check_python_environment() -> None:
     """Check if we're in the right Python environment."""
     print("\n🐍 Python environment:")
     print(f"   Version: {sys.version}")
     print(f"   Executable: {sys.executable}")
 
     # Check if we're in a virtual environment
-    if hasattr(sys, "real_prefix") or (
-        hasattr(sys, "base_prefix") and sys.base_prefix != sys.prefix
-    ):
+    if hasattr(sys, "real_prefix") or (hasattr(sys, "base_prefix") and sys.base_prefix != sys.prefix):
         print("   Environment: Virtual environment ✅")
     else:
         print("   Environment: System Python ⚠️")
         print("   Consider using a virtual environment for development")
 
 
-def main():
+def main() -> int:
     """Main function to check all dependencies."""
     print("🚀 Transcode Toolkit Dependency Checker")
     print("=" * 50)

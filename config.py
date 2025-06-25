@@ -1,16 +1,18 @@
 """Configuration management for media toolkit."""
 
 from __future__ import annotations
+
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
+
 import yaml
 
 LOG = logging.getLogger(__name__)
 
 # Global config instance
-_global_config: Optional["MediaToolkitConfig"] = None
+_global_config: MediaToolkitConfig | None = None
 
 
 @dataclass
@@ -19,17 +21,21 @@ class AudioPreset:
 
     bitrate: str
     application: str
-    cutoff: Optional[int] = None
-    channels: Optional[str] = None
+    cutoff: int | None = None
+    channels: str | None = None
+    min_snr_db: float | None = None  # Minimum SNR to use this preset's full bitrate
+    snr_bitrate_scale: bool = True  # Whether to scale bitrate based on SNR
     description: str = ""
 
-    def model_dump(self) -> Dict[str, Any]:
+    def model_dump(self) -> dict[str, Any]:
         """Return dictionary representation of the preset."""
         return {
             "bitrate": self.bitrate,
             "application": self.application,
             "cutoff": self.cutoff,
             "channels": self.channels,
+            "min_snr_db": self.min_snr_db,
+            "snr_bitrate_scale": self.snr_bitrate_scale,
             "description": self.description,
         }
 
@@ -60,7 +66,7 @@ class AudioConfig:
             ".wma",
         ]
     )
-    presets: Dict[str, AudioPreset] = field(default_factory=dict)
+    presets: dict[str, AudioPreset] = field(default_factory=dict)
 
 
 @dataclass
@@ -79,18 +85,17 @@ class VideoConfig:
             ".m4v",
         ]
     )
-    presets: Dict[str, VideoPreset] = field(default_factory=dict)
+    presets: dict[str, VideoPreset] = field(default_factory=dict)
 
 
 @dataclass
 class GlobalConfig:
     """Global settings."""
 
-    default_workers: Optional[int] = None
+    default_workers: int | None = None
     log_level: str = "INFO"
     create_backups: bool = True
     cleanup_backups: str = "on_success"
-    backup_retention_days: int = 0
 
 
 @dataclass
@@ -102,7 +107,7 @@ class MediaToolkitConfig:
     global_: GlobalConfig = field(default_factory=GlobalConfig)
 
     @classmethod
-    def load_from_file(cls, config_path: Path) -> "MediaToolkitConfig":
+    def load_from_file(cls, config_path: Path) -> MediaToolkitConfig:
         """Load configuration from YAML file."""
         try:
             with config_path.open("r", encoding="utf-8") as f:
@@ -121,43 +126,36 @@ class MediaToolkitConfig:
         """Get an audio preset by name."""
         if preset_name not in self.audio.presets:
             available = ", ".join(self.list_audio_presets())
-            raise ValueError(
-                f"Unknown audio preset '{preset_name}'. Available: {available}"
-            )
+            msg = f"Unknown audio preset '{preset_name}'. Available: {available}"
+            raise ValueError(msg)
         return self.audio.presets[preset_name]
 
     @classmethod
-    def _from_dict(cls, data: Dict[str, Any]) -> "MediaToolkitConfig":
+    def _from_dict(cls, data: dict[str, Any]) -> MediaToolkitConfig:
         """Create config from dictionary."""
         # Parse audio config
         audio_data = data.get("audio", {})
         audio_presets = {}
         for name, preset_data in audio_data.get("presets", {}).items():
             try:
-                if (
-                    isinstance(preset_data, dict)
-                    and "bitrate" in preset_data
-                    and "application" in preset_data
-                ):
+                if isinstance(preset_data, dict) and "bitrate" in preset_data and "application" in preset_data:
                     audio_presets[name] = AudioPreset(
                         bitrate=preset_data["bitrate"],
                         application=preset_data["application"],
                         cutoff=preset_data.get("cutoff"),
                         channels=preset_data.get("channels"),
+                        min_snr_db=preset_data.get("min_snr_db"),
+                        snr_bitrate_scale=preset_data.get("snr_bitrate_scale", True),
                         description=preset_data.get("description", ""),
                     )
                 else:
-                    LOG.warning(
-                        f"Incomplete audio preset data for '{name}': missing required fields"
-                    )
+                    LOG.warning(f"Incomplete audio preset data for '{name}': missing required fields")
             except Exception as e:
                 LOG.warning(f"Failed to load audio preset '{name}': {e}")
 
         audio_config = AudioConfig(
             size_keep_ratio=audio_data.get("size_keep_ratio", 0.95),
-            extensions=audio_data.get(
-                "extensions", [".flac", ".mp3", ".wav", ".aac", ".m4a", ".ogg", ".wma"]
-            ),
+            extensions=audio_data.get("extensions", [".flac", ".mp3", ".wav", ".aac", ".m4a", ".ogg", ".wma"]),
             presets=audio_presets,
         )
 
@@ -179,9 +177,7 @@ class MediaToolkitConfig:
                         description=preset_data.get("description", ""),
                     )
                 else:
-                    LOG.warning(
-                        f"Incomplete video preset data for '{name}': missing required fields"
-                    )
+                    LOG.warning(f"Incomplete video preset data for '{name}': missing required fields")
             except Exception as e:
                 LOG.warning(f"Failed to load video preset '{name}': {e}")
 
@@ -195,12 +191,22 @@ class MediaToolkitConfig:
 
         # Parse global config
         global_data = data.get("global", {})
+
+        # Validate backup strategy
+        cleanup_backups = global_data.get("cleanup_backups", "on_success")
+        valid_strategies = {"never", "on_success"}
+        if cleanup_backups not in valid_strategies:
+            LOG.warning(
+                f"Invalid backup strategy '{cleanup_backups}'. Using 'on_success'. "
+                f"Valid options: {', '.join(valid_strategies)}"
+            )
+            cleanup_backups = "on_success"
+
         global_config = GlobalConfig(
             default_workers=global_data.get("default_workers"),
             log_level=global_data.get("log_level", "INFO"),
             create_backups=global_data.get("create_backups", True),
-            cleanup_backups=global_data.get("cleanup_backups", "on_success"),
-            backup_retention_days=global_data.get("backup_retention_days", 0),
+            cleanup_backups=cleanup_backups,
         )
 
         return cls(audio=audio_config, video=video_config, global_=global_config)

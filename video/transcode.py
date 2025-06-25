@@ -1,15 +1,19 @@
 """Video transcoding functionality."""
 
 from __future__ import annotations
+
 import logging
-from pathlib import Path
-from typing import Dict, Any, List
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 LOG = logging.getLogger(__name__)
 
 
-def _should_skip(meta: Dict[str, Any]) -> bool:
-    """Check if video should be skipped based on metadata.
+def _should_skip(meta: dict[str, Any]) -> bool:
+    """
+    Check if video should be skipped based on metadata.
 
     Skip if already using HEVC codec with reasonable bitrate.
     """
@@ -42,10 +46,9 @@ def _should_skip(meta: Dict[str, Any]) -> bool:
     return False
 
 
-def _ffmpeg_cmd(
-    input_path: Path, output_path: Path, *, crf: int = 23, gpu: bool = False
-) -> List[str]:
-    """Generate FFmpeg command for video transcoding.
+def _ffmpeg_cmd(input_path: Path, output_path: Path, *, crf: int = 23, gpu: bool = False) -> list[str]:
+    """
+    Generate FFmpeg command for video transcoding.
 
     Args:
         input_path: Source video file
@@ -55,6 +58,7 @@ def _ffmpeg_cmd(
 
     Returns:
         FFmpeg command as list of strings
+
     """
     cmd = ["ffmpeg", "-i", str(input_path)]
 
@@ -92,10 +96,9 @@ def _ffmpeg_cmd(
     return cmd
 
 
-def transcode_video(
-    input_path: Path, output_path: Path, *, crf: int = 23, gpu: bool = False
-) -> bool:
-    """Transcode a video file to HEVC.
+def transcode_video(input_path: Path, output_path: Path, *, crf: int = 23, gpu: bool = False) -> bool:
+    """
+    Transcode a video file to HEVC.
 
     Args:
         input_path: Source video file
@@ -105,6 +108,7 @@ def transcode_video(
 
     Returns:
         True if successful, False otherwise
+
     """
     import subprocess
 
@@ -114,15 +118,22 @@ def transcode_video(
         LOG.info(f"Transcoding {input_path} -> {output_path}")
         LOG.debug(f"FFmpeg command: {' '.join(cmd)}")
 
-        subprocess.run(cmd, capture_output=True, text=True, check=True)
+        subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True,
+            encoding="utf-8",
+            errors="replace",
+        )
 
         LOG.info(f"Successfully transcoded {input_path}")
         return True
 
     except subprocess.CalledProcessError as e:
-        LOG.error(f"FFmpeg failed for {input_path}: {e}")
-        LOG.error(f"FFmpeg stderr: {e.stderr}")
+        LOG.exception(f"FFmpeg failed for {input_path}: {e}")
+        LOG.exception(f"FFmpeg stderr: {e.stderr}")
         return False
     except Exception as e:
-        LOG.error(f"Unexpected error transcoding {input_path}: {e}")
+        LOG.exception(f"Unexpected error transcoding {input_path}: {e}")
         return False

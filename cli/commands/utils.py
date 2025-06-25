@@ -1,12 +1,14 @@
 """Utility CLI commands."""
 
 from __future__ import annotations
-import argparse
+
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    import argparse
+
     from core import ConfigManager
 
 LOG = logging.getLogger(__name__)
@@ -15,7 +17,7 @@ LOG = logging.getLogger(__name__)
 class UtilityCommands:
     """Utility command handlers."""
 
-    def __init__(self, config_manager: "ConfigManager"):
+    def __init__(self, config_manager: ConfigManager) -> None:
         self.config_manager = config_manager
 
     def add_subcommands(self, parser: argparse.ArgumentParser) -> None:
@@ -25,12 +27,8 @@ class UtilityCommands:
         # Cleanup command
         cleanup_parser = subparsers.add_parser("cleanup", help="Clean up backup files")
         cleanup_parser.add_argument("path", type=Path, help="Path to directory")
-        cleanup_parser.add_argument(
-            "--force", action="store_true", help="Force removal of all backup files"
-        )
-        cleanup_parser.add_argument(
-            "--dry-run", action="store_true", help="Show what would be deleted"
-        )
+        cleanup_parser.add_argument("--force", action="store_true", help="Force removal of all backup files")
+        cleanup_parser.add_argument("--dry-run", action="store_true", help="Show what would be deleted")
 
         # Info command
         subparsers.add_parser("info", help="Show configuration and system info")
@@ -43,40 +41,42 @@ class UtilityCommands:
 
         if args.util_command == "cleanup":
             return self._handle_cleanup(args)
-        elif args.util_command == "info":
+        if args.util_command == "info":
             return self._handle_info(args)
-        else:
-            LOG.error(f"Unknown utility command: {args.util_command}")
-            return 1
+        LOG.error(f"Unknown utility command: {args.util_command}")
+        return 1
 
     def _handle_cleanup(self, args: argparse.Namespace) -> int:
         """Handle backup cleanup."""
         try:
-            from core import BackupStrategy, FileManager
+            if not args.force:
+                LOG.info("Note: Only force cleanup is available with current backup strategy.")
+                LOG.info("Use --force to remove all .bak files in the directory.")
+                return 0
 
-            if args.force:
-                file_manager = FileManager(BackupStrategy.NEVER)
-                if args.dry_run:
-                    backup_files = list(args.path.rglob("*.bak"))
-                    LOG.info(f"Would remove {len(backup_files)} backup files")
-                    for backup_file in backup_files:
-                        LOG.info(f"  {backup_file}")
-                else:
-                    count = file_manager.force_cleanup_all_backups(args.path)
-                    LOG.info(f"Removed {count} backup files")
+            # Find all backup files
+            backup_files = list(args.path.rglob("*.bak"))
+
+            if args.dry_run:
+                LOG.info(f"Would remove {len(backup_files)} backup files")
+                for backup_file in backup_files:
+                    LOG.info(f"  {backup_file}")
             else:
-                file_manager = FileManager()
-                if args.dry_run:
-                    backup_files = list(args.path.rglob("*.bak"))
-                    LOG.info(f"Would clean up {len(backup_files)} old backup files")
-                else:
-                    count = file_manager.cleanup_old_backups(args.path)
-                    LOG.info(f"Cleaned up {count} old backup files")
+                cleaned_count = 0
+                for backup_file in backup_files:
+                    try:
+                        backup_file.unlink()
+                        cleaned_count += 1
+                        LOG.debug(f"Removed backup: {backup_file}")
+                    except Exception as e:
+                        LOG.warning(f"Failed to remove backup {backup_file}: {e}")
+
+                LOG.info(f"Removed {cleaned_count} backup files")
 
             return 0
 
         except Exception as e:
-            LOG.error(f"Backup cleanup failed: {e}")
+            LOG.exception(f"Backup cleanup failed: {e}")
             return 1
 
     def _handle_info(self, args: argparse.Namespace) -> int:
@@ -118,5 +118,5 @@ class UtilityCommands:
             return 0
 
         except Exception as e:
-            LOG.error(f"Info display failed: {e}")
+            LOG.exception(f"Info display failed: {e}")
             return 1
