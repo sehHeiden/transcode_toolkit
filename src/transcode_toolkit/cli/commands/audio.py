@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import argparse
 
-    from ...core import ConfigManager
+    from transcode_toolkit.core import ConfigManager
 
 LOG = logging.getLogger(__name__)
 
@@ -71,7 +71,7 @@ class AudioCommands:
     def _handle_transcode(self, args: argparse.Namespace) -> int:
         """Handle audio transcoding."""
         try:
-            from ...processors import AudioProcessor
+            from transcode_toolkit.processors import AudioProcessor
 
             processor = AudioProcessor(self.config_manager)
 
@@ -94,7 +94,7 @@ class AudioCommands:
     def _handle_estimate(self, args: argparse.Namespace) -> int:
         """Handle audio size estimation."""
         try:
-            from ...audio import estimate
+            from transcode_toolkit.audio import estimate
 
             # Default to comparison mode unless --no-compare is used with a specific preset
             if args.no_compare and args.preset:
@@ -116,7 +116,7 @@ class AudioCommands:
 
                 # Show usage tip
                 print("\n💡 To convert with recommended settings:")
-                print(f"   python main.py audio transcode '{args.path}' --preset {recommended}")
+                print(f"   python -m src.transcode_toolkit audio transcode '{args.path}' --preset {recommended}")
 
         except Exception:
             LOG.exception("Audio estimation failed")

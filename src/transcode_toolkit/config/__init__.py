@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .constants import *  # noqa: F403, F401
+from .constants import *  # noqa: F403
 from .settings import MediaToolkitConfig, get_config
 
 __all__ = [

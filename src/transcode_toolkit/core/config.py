@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 # Import the existing config system and extend it
-from ..config import MediaToolkitConfig
-from ..config import get_config as _get_global_config
+from transcode_toolkit.config import MediaToolkitConfig
+from transcode_toolkit.config import get_config as _get_global_config
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -98,7 +98,7 @@ class ConfigContext:
         self.config_manager.push_context(self.overrides)
         return self.config_manager
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, _exc_type, _exc_val, _exc_tb):
         self.config_manager.pop_context()
         return False
 

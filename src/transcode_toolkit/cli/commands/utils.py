@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import argparse
 
-    from ...core import ConfigManager
+    from transcode_toolkit.core import ConfigManager
 
 LOG = logging.getLogger(__name__)
 
@@ -139,7 +139,7 @@ class UtilityCommands:
             import json
             import time
 
-            from ...core import DuplicateFinder
+            from transcode_toolkit.core import DuplicateFinder
 
             # Validate input paths
             for path in args.paths:
@@ -164,13 +164,13 @@ class UtilityCommands:
             class ProgressCallback:
                 def __init__(self) -> None:
                     self.last_update_time = time.time()
-                
+
                 def __call__(self, message: str) -> None:
                     current_time = time.time()
                     if current_time - self.last_update_time > 1.0:  # Update every second
                         print(f"Progress: {message}")
                         self.last_update_time = current_time
-            
+
             progress_callback = ProgressCallback()
 
             print("Starting duplicate file search...")

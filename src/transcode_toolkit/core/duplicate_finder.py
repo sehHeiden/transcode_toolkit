@@ -8,7 +8,10 @@ import os
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 LOG = logging.getLogger(__name__)
 
@@ -23,13 +26,14 @@ class FileInfo:
 
     def __post_init__(self):
         if not self.path.exists():
-            raise FileNotFoundError(f"File not found: {self.path}")
+            msg = f"File not found: {self.path}"
+            raise FileNotFoundError(msg)
 
 
 class DuplicateFinder:
     """Parallel duplicate file finder using hash-based comparison."""
 
-    def __init__(self, max_workers: int | None = None, chunk_size: int = 8192):
+    def __init__(self, max_workers: int | None = None, chunk_size: int = 8192) -> None:
         """
         Initialize the duplicate finder.
 
@@ -107,7 +111,7 @@ class DuplicateFinder:
                 file_info.hash = self._calculate_file_hash(file_info.path)
                 return file_info
             except Exception as e:
-                LOG.error(f"Hash calculation failed for {file_info.path}: {e}")
+                LOG.exception(f"Hash calculation failed for {file_info.path}: {e}")
                 return file_info  # Return with hash=None
 
         processed_files = []
@@ -130,7 +134,7 @@ class DuplicateFinder:
 
                 except Exception as e:
                     file_info = future_to_file[future]
-                    LOG.error(f"Hash calculation error for {file_info.path}: {e}")
+                    LOG.exception(f"Hash calculation error for {file_info.path}: {e}")
 
         LOG.info(f"Successfully calculated hashes for {len(processed_files)} files")
         return processed_files
@@ -187,7 +191,7 @@ class DuplicateFinder:
 
         # Step 3: Calculate hashes only for files with matching sizes
         files_to_hash = []
-        for size, files in size_groups.items():
+        for files in size_groups.values():
             files_to_hash.extend(files)
 
         if progress_callback:

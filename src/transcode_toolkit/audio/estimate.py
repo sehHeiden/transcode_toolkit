@@ -3,6 +3,7 @@
 import csv
 import json
 import logging
+import random
 import shutil
 import subprocess
 import time
@@ -13,7 +14,7 @@ from typing import Any, NamedTuple
 import psutil
 from tqdm import tqdm
 
-from ..config import get_config
+from transcode_toolkit.config import get_config
 
 
 class EstimationResult(NamedTuple):
@@ -77,7 +78,7 @@ def _probe(path: Path) -> dict[str, Any]:
 
 def _estimate_folder_snr(folder: Path, audio_files: list[Path]) -> float:
     """Estimate representative SNR for an entire folder by smart sampling."""
-    from ..core import FFmpegProbe
+    from transcode_toolkit.core import FFmpegProbe
 
     total_files = len(audio_files)
     if total_files == 0:
@@ -196,7 +197,7 @@ def analyse(root: Path, target_br: int) -> list[tuple[Path, int, int]]:
     files = [p for p in root.rglob("*") if p.suffix.lower() in audio_exts]
 
     # Use more aggressive worker count for I/O bound FFprobe operations
-    max_workers = min(psutil.cpu_count(logical=True) or 1, len(files))
+    max_workers = max(1, min(psutil.cpu_count(logical=True) or 1, len(files)))  # Ensure minimum 1 worker
     print(f"Using {max_workers} workers to probe {len(files)} files...")
 
     start_time = time.time()
@@ -230,78 +231,193 @@ def compare_presets(root: Path) -> list[EstimationResult]:
                 folder_groups[folder] = []
             folder_groups[folder].append(p)
 
-    # Estimate SNR per folder using smart sampling
+    total_audio_files = sum(len(files) for files in folder_groups.values())
+    print(f"Found {total_audio_files} audio files in {len(folder_groups)} folders")
+
+    # Do folder-level SNR sampling - only probe sample files per folder
+    sample_files = []
     folder_snr_cache = {}
-    total_samples = 0
+    max_samples_per_folder = 3  # Only probe 3 files per folder for SNR estimation
+
     for folder, files in folder_groups.items():
-        folder_snr_cache[folder] = _estimate_folder_snr(folder, files)
-        # Count how many samples we actually used
-        if len(files) <= 3:
-            total_samples += len(files)
-        elif len(files) <= 10:
-            total_samples += 3
-        else:
-            total_samples += 3
+        # Sample a few files from each folder for SNR estimation
+        folder_samples = (
+            files[:max_samples_per_folder]
+            if len(files) <= max_samples_per_folder
+            else random.sample(files, max_samples_per_folder)
+        )
+        sample_files.extend(folder_samples)
 
-    LOG.info("Analyzed %d sample files across %d folders for SNR estimation", total_samples, len(folder_groups))
+        # Use default SNR for fast estimation
+        folder_snr_cache[folder] = 65.0  # Conservative estimate for mixed content
 
-    # Process all files using cached folder SNR
-    all_files = [file_path for files in folder_groups.values() for file_path in files]
+    print(f"Sampling {len(sample_files)} files from {len(folder_groups)} folders for metadata analysis")
 
     # Get all metadata and bitrate info in a single FFprobe operation per file
     def get_complete_file_info(file_path):
         """Get both basic metadata and bitrate info in one FFprobe call."""
         try:
-            from ..core import FFmpegProbe
+            from transcode_toolkit.core import FFmpegProbe
+            from transcode_toolkit.core.ffmpeg import FFmpegError
 
             # Use FFmpegProbe.get_audio_info which gets everything we need
             audio_info = FFmpegProbe.get_audio_info(file_path)
-            return file_path, {
-                "duration": audio_info.get("duration", 0),
-                "size": audio_info.get("size", file_path.stat().st_size),
-                "bitrate": audio_info.get("bitrate"),
-                "codec": audio_info.get("codec"),
-            }
+            return (
+                file_path,
+                {
+                    "duration": audio_info.get("duration", 0),
+                    "size": audio_info.get("size", file_path.stat().st_size),
+                    "bitrate": audio_info.get("bitrate"),
+                    "codec": audio_info.get("codec"),
+                },
+                None,
+            )  # No error
+        except FFmpegError as e:
+            # Capture the actual FFmpeg error message
+            error_msg = str(e)
+
+            # Extract meaningful parts of the error message
+            if "No audio streams found" in error_msg:
+                reason = "No audio streams found"
+            elif "timed out" in error_msg.lower():
+                reason = "FFprobe timeout"
+            elif "Invalid JSON" in error_msg:
+                reason = "Invalid JSON response"
+            elif "ffprobe failed for" in error_msg:
+                # Extract the actual ffprobe stderr/stdout message
+                parts = error_msg.split(": ", 2)
+                if len(parts) >= 3:
+                    actual_error = parts[2].strip()
+                    # Clean up common FFmpeg error patterns
+                    if actual_error:
+                        reason = actual_error[:100]  # Limit length but show actual error
+                    else:
+                        reason = f"FFprobe error (code {e.return_code})" if e.return_code else "FFprobe failed"
+                else:
+                    reason = f"FFprobe error (code {e.return_code})" if e.return_code else "FFprobe failed"
+            else:
+                # Show the actual error message, truncated if too long
+                reason = error_msg[:100] + "..." if len(error_msg) > 100 else error_msg
+            return file_path, None, reason
+        except subprocess.CalledProcessError as e:
+            # Direct subprocess errors
+            reason = f"FFprobe subprocess error (code {e.returncode})"
+            return file_path, None, reason
+        except FileNotFoundError:
+            reason = "File not found"
+            return file_path, None, reason
+        except PermissionError:
+            reason = "Permission denied"
+            return file_path, None, reason
         except Exception as e:
-            LOG.warning("Failed to analyze %s: %s", file_path, e)
-            return file_path, None
+            # Other unexpected errors
+            error_type = type(e).__name__
+            reason = f"{error_type}: {str(e)[:50]}..."
+            return file_path, None, reason
 
     # Use more conservative worker count for better performance
-    max_workers = min(8, psutil.cpu_count(logical=False) or 1, len(all_files))  # Cap at 8, use physical cores
-    print(f"Using {max_workers} workers to analyze {len(all_files)} files (single FFprobe per file)...")
+    max_workers = max(
+        1, min(8, psutil.cpu_count(logical=False) or 1, len(sample_files))
+    )  # Cap at 8, use physical cores, minimum 1
+    print(f"Using {max_workers} workers to analyze {len(sample_files)} files (single FFprobe per file)...")
 
     file_metadata = {}
+    failed_files = []  # Track failed files with reasons
     start_time = time.time()
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_file = {executor.submit(get_complete_file_info, file_path): file_path for file_path in all_files}
-        for future in tqdm(as_completed(future_to_file), total=len(future_to_file), desc="Analyzing Audio Files"):
-            file_path = future_to_file[future]
-            try:
-                _, metadata = future.result()
-                if metadata:  # Only add if we got valid metadata
-                    file_metadata[file_path] = metadata
-            except Exception as exc:
-                LOG.warning("Failed to analyze %s: %s", file_path, exc)
-                continue
+
+    # Temporarily disable FFmpeg warnings during bulk processing
+    ffmpeg_logger = logging.getLogger("transcode_toolkit.core.ffmpeg")
+    original_level = ffmpeg_logger.level
+    ffmpeg_logger.setLevel(logging.ERROR)  # Only show errors, suppress warnings
+
+    try:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_file = {
+                executor.submit(get_complete_file_info, file_path): file_path for file_path in sample_files
+            }
+            for future in tqdm(as_completed(future_to_file), total=len(future_to_file), desc="Analyzing Audio Files"):
+                file_path = future_to_file[future]
+                try:
+                    result = future.result()
+                    if len(result) == 3:  # New format with error reason
+                        _, metadata, error_reason = result
+                        if metadata:  # Only add if we got valid metadata
+                            file_metadata[file_path] = metadata
+                        else:
+                            failed_files.append((file_path, error_reason or "Unknown error"))
+                    else:  # Legacy format
+                        _, metadata = result
+                        if metadata:  # Only add if we got valid metadata
+                            file_metadata[file_path] = metadata
+                        else:
+                            failed_files.append((file_path, "No metadata returned"))
+                except Exception as exc:
+                    # Suppress individual warnings during processing, but track reason
+                    reason = str(exc).split(":")[0] if ":" in str(exc) else str(exc)[:50]
+                    failed_files.append((file_path, reason))
+                    continue
+    finally:
+        # Restore original logging level
+        ffmpeg_logger.setLevel(original_level)
 
     elapsed = time.time() - start_time
     print(f"Analyzed {len(file_metadata)} files in {elapsed:.2f}s ({len(file_metadata) / elapsed:.1f} files/sec)")
 
-    # Combine all the information
+    # Show failed files summary if any
+    if failed_files:
+        from collections import Counter
+
+        reasons = Counter(reason for _, reason in failed_files)
+        most_common = reasons.most_common(3)  # Show top 3 reasons
+
+        print(f"\n⚠️  {len(failed_files)} files failed analysis. Common reasons:")
+        for reason, count in most_common:
+            print(f"   • {reason} ({count} files)")
+
+    # Combine all the information - extrapolate sample data to all files
     files_with_cache = []
     for folder, files in folder_groups.items():
         folder_snr = folder_snr_cache[folder]
+
+        # Get representative metadata from sampled files in this folder
+        folder_metadata: list[dict[str, Any]] = [meta for path, meta in file_metadata.items() if path.parent == folder]
+
+        if folder_metadata:
+            # Use average bitrate and most common codec from samples
+            bitrates = [int(meta.get("bitrate", 0) or 0) for meta in folder_metadata]
+            avg_bitrate = sum(bitrates) / len(bitrates) if bitrates else 128000
+            codecs: list[str] = [codec for meta in folder_metadata if (codec := meta.get("codec")) is not None]
+            representative_codec = max(set(codecs), key=codecs.count) if codecs else "unknown"
+        else:
+            # Fallback if no samples succeeded in this folder
+            avg_bitrate = 128000  # 128k default
+            representative_codec = "unknown"
+
+        # Apply representative data to all files in folder
         for file_path in files:
             if file_path in file_metadata:
+                # Use actual metadata for sampled files
                 meta = file_metadata[file_path]
                 cache = {
                     "duration": meta["duration"],
                     "size": meta["size"],
                     "estimated_snr": folder_snr,
-                    "bitrate": meta["bitrate"],  # Now from the same FFprobe call
+                    "bitrate": meta["bitrate"],
                     "codec": meta["codec"],
                 }
-                files_with_cache.append((file_path, cache))
+            else:
+                # Extrapolate for non-sampled files using file size and representative data
+                file_size = file_path.stat().st_size
+                # Estimate duration from file size and bitrate
+                estimated_duration = (file_size * 8) / avg_bitrate if avg_bitrate > 0 else 180  # 3min default
+                cache = {
+                    "duration": estimated_duration,
+                    "size": file_size,
+                    "estimated_snr": folder_snr,
+                    "bitrate": int(avg_bitrate),
+                    "codec": representative_codec,
+                }
+            files_with_cache.append((file_path, cache))
 
     # Calculate estimates for each preset using cached data
     results = []
@@ -460,7 +576,7 @@ def cli(
             print(f"\nJSON report → {json_path}")
 
         print(
-            f"\n💡 To convert with recommended settings:\n   python -m audio.transcode /path/to/audio --preset {recommended}"
+            f"\n💡 To convert with recommended settings:\n   python -m src.transcode_toolkit audio transcode '{path}' --preset {recommended}"
         )
         return
 

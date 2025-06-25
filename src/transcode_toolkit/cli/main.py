@@ -7,7 +7,7 @@ import logging
 import sys
 from pathlib import Path
 
-from ..core import ConfigManager, ProcessingOptions, with_config_overrides
+from transcode_toolkit.core import ConfigManager, ProcessingOptions, with_config_overrides
 
 from .commands import AudioCommands, UtilityCommands, VideoCommands
 
@@ -60,7 +60,7 @@ Examples:
 
   # Clean up backup files
   media-toolkit utils cleanup /path/to/media --force
-  
+
   # Find duplicate files
   media-toolkit utils duplicates /path/to/media --extensions .mp3 .flac
             """,

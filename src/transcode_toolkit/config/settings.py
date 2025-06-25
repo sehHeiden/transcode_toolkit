@@ -217,8 +217,8 @@ def get_config() -> MediaToolkitConfig:
     global _global_config
 
     if _global_config is None:
-        # Try to load from default config file
-        config_path = Path(__file__).parent / "config.yaml"
+        # Try to load from default config file (look in project root)
+        config_path = Path.cwd() / "config.yaml"
         if config_path.exists():
             _global_config = MediaToolkitConfig.load_from_file(config_path)
         else:

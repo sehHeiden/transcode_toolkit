@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 import psutil
 from tqdm import tqdm
 
-from ..core import (
+from transcode_toolkit.core import (
     BackupStrategy,
     ConfigManager,
     FFmpegError,
@@ -105,7 +105,7 @@ def _get_thermal_limit() -> int:
             temps = psutil.sensors_temperatures()
             if temps:
                 max_temp = 0
-                for name, entries in temps.items():
+                for entries in temps.values():
                     for entry in entries:
                         if entry.current and entry.current > max_temp:
                             max_temp = entry.current
@@ -324,7 +324,7 @@ class AudioProcessor(MediaProcessor):
         # Pre-compute folder SNR once per directory so each thread can reuse it
         from collections import defaultdict
 
-        from ..core.audio_analysis import analyze_folder_snr
+        from transcode_toolkit.core.audio_analysis import analyze_folder_snr
 
         folder_map: dict[Path, list[Path]] = defaultdict(list)
         for f in all_files:
@@ -523,28 +523,27 @@ class AudioProcessor(MediaProcessor):
             desc="Analyzing files",
             unit="file",
             bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",
-        ) as progress:
-            with ThreadPoolExecutor(max_workers=analysis_workers) as executor:
-                # Submit all analysis tasks
-                future_to_file = {
-                    executor.submit(self.should_process, file_path, preset=preset, **kwargs): file_path
-                    for file_path in all_files
-                }
+        ) as progress, ThreadPoolExecutor(max_workers=analysis_workers) as executor:
+            # Submit all analysis tasks
+            future_to_file = {
+                executor.submit(self.should_process, file_path, preset=preset, **kwargs): file_path
+                for file_path in all_files
+            }
 
-                # Collect results as they complete
-                for future in as_completed(future_to_file):
-                    file_path = future_to_file[future]
-                    try:
-                        should_process = future.result()
-                        if should_process:
-                            files_to_process.append(file_path)
+            # Collect results as they complete
+            for future in as_completed(future_to_file):
+                file_path = future_to_file[future]
+                try:
+                    should_process = future.result()
+                    if should_process:
+                        files_to_process.append(file_path)
 
-                        # Update progress with current file being checked
-                        progress.set_description(f"Checked {file_path.stem[:20]}...")
-                    except Exception as e:
-                        self.logger.warning(f"Failed to analyze {file_path}: {e}")
-                    finally:
-                        progress.update(1)
+                    # Update progress with current file being checked
+                    progress.set_description(f"Checked {file_path.stem[:20]}...")
+                except Exception as e:
+                    self.logger.warning(f"Failed to analyze {file_path}: {e}")
+                finally:
+                    progress.update(1)
 
         self.logger.info(f"Analysis complete: {len(files_to_process)}/{len(all_files)} files need processing")
         return files_to_process
@@ -577,7 +576,7 @@ def _check_thermal_throttling() -> None:
                 temps = psutil.sensors_temperatures()
                 if temps:
                     max_temp = 0
-                    for name, entries in temps.items():
+                    for entries in temps.values():
                         for entry in entries:
                             if entry.current and entry.current > max_temp:
                                 max_temp = entry.current

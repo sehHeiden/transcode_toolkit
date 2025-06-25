@@ -52,7 +52,9 @@ audio:
     - .aac
     - .m4a
     - .ogg
+    - .opus
     - .wma
+    - .aax
 
   # Audio encoding presets
   presets:

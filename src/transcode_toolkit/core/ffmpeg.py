@@ -26,11 +26,15 @@ class FFmpegError(ProcessingError):
         message: str,
         command: list[str] | None = None,
         return_code: int | None = None,
+        stderr: str | None = None,
+        stdout: str | None = None,
         **kwargs,
     ) -> None:
         super().__init__(message, **kwargs)
         self.command = command
         self.return_code = return_code
+        self.stderr = stderr
+        self.stdout = stdout
 
 
 class FFmpegProbe:
@@ -83,12 +87,16 @@ class FFmpegProbe:
             )
             return json.loads(result.stdout)
         except subprocess.CalledProcessError as e:
-            msg = f"ffprobe failed for {file_path}: {e.stderr or e.stdout}"
+            # Capture both stderr and stdout for detailed error info
+            error_details = e.stderr or e.stdout or "No error output"
+            msg = f"ffprobe failed for {file_path}: {error_details.strip()}"
             raise FFmpegError(
                 msg,
                 command=cmd,
                 return_code=e.returncode,
                 file_path=file_path,
+                stderr=e.stderr,
+                stdout=e.stdout,
             )
         except subprocess.TimeoutExpired:
             msg = f"ffprobe timed out for {file_path}"

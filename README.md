@@ -1,71 +1,113 @@
 # Transcode Toolkit
 
-Unified helper scripts for estimating space savings, analysing quality and batch transcoding **video** (H.265/HEVC) and **audio** (Opus) libraries.
+Unified toolkit for estimating space savings and batch transcoding **video** (H.265/HEVC) and **audio** (Opus) libraries with a modern, modular architecture.
 
-## ✨ New Features
+## ✨ Features
 
-- **🎯 Smart Audio Estimation**: Get intelligent preset recommendations
-- **🔧 Dependency Checking**: Automatic FFmpeg installation verification
-- **⚙️ Unified Presets**: Estimation and transcoding use identical settings
+- **🎯 Smart Audio Estimation**: Get intelligent preset recommendations with SNR-based bitrate scaling
+- **⚙️ Modular Architecture**: Clean src-layout structure following Python best practices
+- **🛠️ CLI Interface**: Comprehensive command-line interface with subcommands
 - **📊 Preset Comparison**: Compare all audio presets side-by-side
+- **🔧 Built-in Utilities**: Duplicate file detection, backup management, system info
+- **🚀 Easy Usage**: Simple Makefile commands for common operations
 
 ---
 
-## Folder structure
+## Project Structure
 
 ```
 transcode_toolkit/
-├── media_toolkit.py          # single CLI entry‑point
-│
-├── video/
+├── src/transcode_toolkit/     # Main package (src-layout)
 │   ├── __init__.py
-│   ├── transcode.py          # batch H.265 encoding (CPU or NVENC)
-│   ├── estimate.py           # size‑saving estimator
-│   └── blur_quality.py       # (placeholder) blur/VMAF analysis
-│
-├── audio/
-│   ├── __init__.py
-│   ├── estimate.py           # Opus size estimator
-│   └── opus_quality.py       # (placeholder) speech/music detection
-│
-├── tests/                    # pytest tests
-│   └── test_transcode.py
-│
-└── pyproject.toml            # uv / PEP 621 metadata
+│   ├── cli/                   # Command-line interface
+│   │   ├── main.py           # Main CLI entry point
+│   │   └── commands/         # Command handlers
+│   ├── config/               # Configuration management
+│   │   ├── settings.py       # Config classes and loading
+│   │   └── constants.py      # System constants
+│   ├── core/                 # Core functionality
+│   │   ├── base.py          # Base classes
+│   │   ├── config.py        # Config manager
+│   │   ├── ffmpeg.py        # FFmpeg wrapper
+│   │   ├── file_manager.py  # File operations
+│   │   └── duplicate_finder.py # Duplicate detection
+│   ├── processors/          # Media processors
+│   │   ├── audio_processor.py
+│   │   └── video_processor.py
+│   ├── audio/              # Audio utilities
+│   │   └── estimate.py     # Size estimation
+│   ├── video/              # Video utilities
+│   │   ├── transcode.py    # H.265 encoding
+│   │   ├── estimate.py     # Size estimation
+│   │   └── blur_quality.py # Quality analysis
+│   └── tui/                # Future: Text UI
+├── tests/                  # Test files
+├── config.yaml            # Configuration file
+├── Makefile              # Convenient command shortcuts
+└── pyproject.toml        # Project metadata
 ```
 
 ---
 
-## Quick start (uv)
+## Quick Start
+
+### Installation
 
 ```bash
-# 1 – create virtual env & lock file
-aud init                 # generates .venv + pyproject.toml + uv.lock
+# Clone and set up environment
+git clone <repository-url>
+cd transcode_toolkit
 
-# 2 – install runtime dependencies
-uv sync                  # identical to 'uv pip install -r'
+# Install dependencies with uv
+uv sync
 
-# 3 – run tests
-uv run pytest -q
-
-# 4 – explore CLI
-uv run python media_toolkit.py -h
+# Or with pip
+pip install -e .
 ```
 
-### 🆕 New: Smart Audio Estimation
+### Basic Usage
 
 ```bash
-# 1. Check if FFmpeg is installed
-uv run python check_deps.py
+# Show help
+python -m src.transcode_toolkit.cli.main --help
 
-# 2. Get intelligent recommendations for all presets
-uv run python media_toolkit.py audio estimate /path/to/audio
+# Check system information
+python -m src.transcode_toolkit.cli.main utils info
 
-# 3. Save detailed comparison report
-uv run python media_toolkit.py audio estimate /path/to/audio --json audio_analysis.json
+# Run tests
+pytest tests/ -v
+```
 
-# 4. Convert with recommended preset
-uv run python media_toolkit.py audio transcode /path/to/audio --preset audiobook
+## 🎵 Audio Commands
+
+### Estimate Size Savings
+
+```bash
+# Get intelligent recommendations for all presets
+python -m src.transcode_toolkit.cli.main audio estimate "C:\Music"
+
+# Works with paths containing special characters
+python -m src.transcode_toolkit.cli.main audio estimate "F:\Audio\Hörbücher"
+
+# Save estimation results to CSV
+python -m src.transcode_toolkit.cli.main audio estimate "C:\Music" --csv results.csv
+
+# Analyze specific preset only
+python -m src.transcode_toolkit.cli.main audio estimate "C:\Music" --preset audiobook --no-compare
+```
+
+### Transcode Audio Files
+
+```bash
+# Transcode with specific preset (always recursive)
+python -m src.transcode_toolkit.cli.main audio transcode "C:\Music" --preset audiobook --recursive
+
+# Works with paths containing special characters
+python -m src.transcode_toolkit.cli.main audio transcode "F:\Audio\Hörbücher" --preset audiobook --recursive
+
+# Different audio presets:
+python -m src.transcode_toolkit.cli.main audio transcode "C:\Music" --preset music --recursive
+python -m src.transcode_toolkit.cli.main audio transcode "C:\Music" --preset high --recursive
 ```
 
 **Sample Output:**
@@ -84,45 +126,80 @@ music               120.5 MB    96.4 MB    24.1 MB   20.0%
   → Channels: 1
 ```
 
-### Example workflows
+## 🎬 Video Commands
 
 ```bash
-# Estimate potential video savings (HEVC, conservative bitrate table)
-uv run python media_toolkit.py video estimate  D:\Videos  --csv reports/video.csv
+# Estimate video size savings
+python -m src.transcode_toolkit.cli.main video estimate "D:\Videos"
 
-# Batch‑transcode with NVIDIA NVENC, keep originals as .bak
-uv run python media_toolkit.py video transcode D:\Videos --gpu --workers 3 -v
+# Transcode with GPU acceleration
+python -m src.transcode_toolkit.cli.main video transcode "D:\Videos" --gpu --crf 22
 
-# Compare all audio presets and get smart recommendations
-uv run python media_toolkit.py audio estimate  E:\Audiobooks --compare
+# Transcode with CPU (default)
+python -m src.transcode_toolkit.cli.main video transcode "D:\Videos" --crf 24
+```
 
-# Legacy: Analyze specific preset only
-uv run python media_toolkit.py audio estimate  E:\Audiobooks --mode audiobook --csv reports/audio.csv
+## 🔧 Utility Commands
+
+```bash
+# Find duplicate files
+python -m src.transcode_toolkit.cli.main utils duplicates "C:\Music" --extensions .mp3 .flac
+
+# Clean up backup files
+python -m src.transcode_toolkit.cli.main utils cleanup "C:\Music" --force
+
+# Show configuration and system info
+python -m src.transcode_toolkit.cli.main utils info
+```
+
+## 📋 Available Audio Presets
+
+- **music**: High quality for music (128k, audio application)
+- **audiobook**: Optimized for speech (32k, voip application, mono)
+- **low**: Lower bitrate option (64k)
+- **high**: Higher quality option (192k)
+
+Presets automatically scale bitrate based on source material quality (SNR) when enabled.
+
+---
+
+## 🧪 Development
+
+```bash
+# Run type checking
+make type-check
+# or
+python -m mypy .
+
+# Run tests
+pytest tests/ -v
+
+# Run linting
+ruff check src/ tests/
+
+# Run all checks
+ty check .  # Alternative type checker
 ```
 
 ---
 
-## Building a standalone Windows EXE (Nuitka)
+## 📋 Requirements
 
-```powershell
-uv add nuitka zstandard ninja          # one‑time, dev‑only
+- Python 3.13+
+- FFmpeg (with ffprobe) in PATH
+- Optional: NVIDIA drivers for GPU-accelerated video transcoding
 
-# Include ffmpeg.exe, ffprobe.exe, nvEncodeAPI64.dll in 'bin/'
-mkdir bin
-# → copy binaries into bin/
+## 🗂️ Configuration
 
-uv run python -m nuitka media_toolkit.py `
-    --standalone --onefile `
-    --include-data-dir=bin=bin `
-    --output-dir=dist
-```
+Edit `config.yaml` to customize:
+- Audio presets (bitrates, applications, SNR thresholds)
+- Video settings
+- Global options (workers, backup strategy)
 
-Result: `dist\media_toolkit.exe` – portable, GPU‑enabled.
+## 📈 Roadmap
 
----
-
-## Roadmap
-
-* Implement real **blur/VMAF** analysis in `video/blur_quality.py`.
-* Add **speech/music classifier** in `audio/opus_quality.py`.
-* Write GitHub Actions workflow to build Nuitka artefacts on every tag.
+- **TUI Interface**: Terminal-based user interface in `src/transcode_toolkit/tui/`
+- **Enhanced Video Analysis**: Blur/VMAF quality metrics
+- **Audio Classification**: Automatic speech/music detection
+- **Batch Processing**: Queue management for large operations
+- **Progress Monitoring**: Enhanced progress tracking and estimation
