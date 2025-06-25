@@ -7,7 +7,7 @@ import logging
 import sys
 from pathlib import Path
 
-from core import ConfigManager, ProcessingOptions, with_config_overrides
+from ..core import ConfigManager, ProcessingOptions, with_config_overrides
 
 from .commands import AudioCommands, UtilityCommands, VideoCommands
 

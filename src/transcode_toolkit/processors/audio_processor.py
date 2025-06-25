@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 import psutil
 from tqdm import tqdm
 
-from core import (
+from ..core import (
     BackupStrategy,
     ConfigManager,
     FFmpegError,
@@ -27,48 +27,105 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-def get_safe_worker_count(configured_workers: int | None) -> int:
+def get_thermal_safe_worker_count(configured_workers: int | None) -> int:
     """
-    Get a safe number of workers that doesn't overwhelm the system.
+    Get a thermally safe number of workers that doesn't overwhelm the system.
 
-    Uses psutil to properly differentiate between physical and logical cores,
-    ensuring we don't use all physical cores to keep the system responsive.
+    Uses psutil to monitor system load and temperature (where available),
+    ensuring we don't use too many cores that could cause thermal issues.
 
     Args:
         configured_workers: The configured worker count, or None for auto-detection
 
     Returns:
-        Safe number of workers that avoids using all physical cores
+        Safe number of workers considering thermal and system constraints
 
     """
+    logger = logging.getLogger(__name__)
+
     if configured_workers is not None and configured_workers > 0:
-        return configured_workers
+        # Still apply thermal safety checks even for manual configuration
+        safe_workers = min(configured_workers, _get_thermal_limit())
+        if safe_workers < configured_workers:
+            logger.warning(
+                f"Reducing configured workers from {configured_workers} to {safe_workers} "
+                "due to thermal/system load constraints"
+            )
+        return safe_workers
 
     # Get actual core counts using psutil
     try:
         physical_cores = psutil.cpu_count(logical=False) or 1
         logical_cores = psutil.cpu_count(logical=True) or 1
 
-        # Conservative approach: use at most (physical_cores - 1) workers
-        # This ensures we always leave at least one full physical core free
-        # for the system and other processes
-        max_workers = max(1, physical_cores - 1)
+        # Check current system load
+        cpu_percent = psutil.cpu_percent(interval=1.0)
 
-        # Cap at 8 workers to avoid excessive context switching overhead
-        max_workers = min(max_workers, 8)
+        # Very conservative approach for thermal safety:
+        # - Use at most half the physical cores for heavy transcoding
+        # - Leave plenty of headroom for system cooling
+        max_workers = max(1, physical_cores // 2)
 
-        logging.getLogger(__name__).info(
-            f"Detected {physical_cores} physical cores, {logical_cores} logical cores. "
-            f"Using {max_workers} workers (leaving {physical_cores - max_workers} physical cores free)."
+        # Apply additional thermal limits
+        thermal_limit = _get_thermal_limit()
+        max_workers = min(max_workers, thermal_limit)
+
+        # If system is already under high load, reduce workers further
+        if cpu_percent > 70:
+            max_workers = max(1, max_workers // 2)
+            logger.warning(f"High CPU load detected ({cpu_percent:.1f}%), reducing workers to {max_workers}")
+
+        # Cap at 4 workers to prevent thermal issues on most systems
+        max_workers = min(max_workers, 4)
+
+        logger.info(
+            f"Thermal-safe configuration: {physical_cores} physical cores, {logical_cores} logical cores, "
+            f"CPU load: {cpu_percent:.1f}%. Using {max_workers} workers for thermal safety."
         )
 
         return max_workers
 
     except Exception as e:
-        # Fallback if psutil fails
-        logging.getLogger(__name__).warning(
-            f"Failed to detect CPU cores with psutil: {e}. Using fallback of 2 workers."
-        )
+        # Very conservative fallback if monitoring fails
+        logger.warning(f"Failed to detect system specs with psutil: {e}. Using conservative fallback of 1 worker.")
+        return 1
+
+
+def _get_thermal_limit() -> int:
+    """
+    Determine thermal limits based on system capabilities.
+
+    Returns:
+        Maximum recommended workers considering thermal constraints
+
+    """
+    try:
+        # Try to get temperature sensors (Linux systems mostly)
+        if hasattr(psutil, "sensors_temperatures"):
+            temps = psutil.sensors_temperatures()
+            if temps:
+                max_temp = 0
+                for name, entries in temps.items():
+                    for entry in entries:
+                        if entry.current and entry.current > max_temp:
+                            max_temp = entry.current
+
+                # If we can read temps and they're high, be more conservative
+                if max_temp > 70:  # Above 70°C, reduce workers
+                    return 2
+                if max_temp > 60:  # Above 60°C, moderate reduction
+                    return 3
+
+        # Check available memory as another thermal/stability indicator
+        memory = psutil.virtual_memory()
+        if memory.percent > 80:  # High memory usage can indicate thermal stress
+            return 2
+
+        # Default thermal-safe limit
+        return 4
+
+    except Exception:
+        # If we can't monitor anything, be very conservative
         return 2
 
 
@@ -245,28 +302,30 @@ class AudioProcessor(MediaProcessor):
         # Get worker count from config if not specified
         if max_workers is None:
             configured_workers = self.config_manager.get_value("global_.default_workers")
-            max_workers = get_safe_worker_count(configured_workers)
+            max_workers = get_thermal_safe_worker_count(configured_workers)
         else:
-            # Even if specified, ensure it's safe
-            max_workers = get_safe_worker_count(max_workers)
+            # Even if specified, ensure it's thermally safe
+            max_workers = get_thermal_safe_worker_count(max_workers)
 
         # Note: Backup cleanup is now handled only at session end for successful operations
 
         # Get all compatible files with progress feedback
         pattern = "**/*" if recursive else "*"
         self.logger.info(f"Scanning directory: {directory} (recursive: {recursive})")
-        
+
         # First pass: find all audio files
         all_files = [f for f in directory.glob(pattern) if f.is_file() and self.can_process(f)]
         self.logger.info(f"Found {len(all_files)} audio files to analyze")
-        
+
         # Second pass: filter files that need processing with multicore analysis
         files = self._analyze_files_parallel(all_files, preset, max_workers, **kwargs)
 
         # Initialize progress bar with more details
         # Pre-compute folder SNR once per directory so each thread can reuse it
         from collections import defaultdict
-        from core.audio_analysis import analyze_folder_snr
+
+        from ..core.audio_analysis import analyze_folder_snr
+
         folder_map: dict[Path, list[Path]] = defaultdict(list)
         for f in all_files:
             folder_map[f.parent].append(f)
@@ -298,8 +357,11 @@ class AudioProcessor(MediaProcessor):
                     )
                     results.append(result)
                     progress_bar.update(1)
+
+                    # Check for thermal issues even in single-threaded mode
+                    _check_thermal_throttling()
             else:
-                # Multi-threaded processing
+                # Multi-threaded processing with thermal monitoring
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
                     future_to_file = {
                         executor.submit(
@@ -312,6 +374,7 @@ class AudioProcessor(MediaProcessor):
                         for file_path in files
                     }
 
+                    completed_count = 0
                     for future in as_completed(future_to_file):
                         file_path = future_to_file[future]
                         try:
@@ -336,6 +399,11 @@ class AudioProcessor(MediaProcessor):
                             progress_bar.set_description(f"✗ Error {file_path.name}")
                         finally:
                             progress_bar.update(1)
+                            completed_count += 1
+
+                            # Check thermal throttling every 5 files
+                            if completed_count % 5 == 0:
+                                _check_thermal_throttling()
         finally:
             # Close progress bar
             progress_bar.close()
@@ -353,7 +421,9 @@ class AudioProcessor(MediaProcessor):
 
         return results
 
-    def _calculate_effective_bitrate(self, file_path: Path, audio_info: dict[str, Any], preset_config, folder_snr: float | None = None) -> str:
+    def _calculate_effective_bitrate(
+        self, file_path: Path, audio_info: dict[str, Any], preset_config, folder_snr: float | None = None
+    ) -> str:
         """
         Calculate effective bitrate using SNR-based intelligent limiting.
 
@@ -429,11 +499,11 @@ class AudioProcessor(MediaProcessor):
     def _analyze_files_parallel(self, all_files: list[Path], preset: str, max_workers: int, **kwargs) -> list[Path]:
         """
         Analyze files in parallel to determine which ones need processing.
-        
+
         This parallelizes the should_process check which involves FFmpeg calls.
         """
         files_to_process = []
-        
+
         if len(all_files) <= 20:
             # For small sets, use sequential processing (overhead isn't worth it)
             for file_path in all_files:
@@ -441,27 +511,26 @@ class AudioProcessor(MediaProcessor):
                     files_to_process.append(file_path)
             self.logger.info(f"Analysis complete: {len(files_to_process)}/{len(all_files)} files need processing")
             return files_to_process
-        
+
         # For larger sets, use parallel analysis
         analysis_workers = min(max_workers, len(all_files) // 4)  # Don't use too many workers for analysis
         analysis_workers = max(1, analysis_workers)
-        
+
         self.logger.info(f"Analyzing {len(all_files)} files using {analysis_workers} workers...")
-        
+
         with tqdm(
             total=len(all_files),
             desc="Analyzing files",
             unit="file",
-            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]"
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",
         ) as progress:
-            
             with ThreadPoolExecutor(max_workers=analysis_workers) as executor:
                 # Submit all analysis tasks
                 future_to_file = {
                     executor.submit(self.should_process, file_path, preset=preset, **kwargs): file_path
                     for file_path in all_files
                 }
-                
+
                 # Collect results as they complete
                 for future in as_completed(future_to_file):
                     file_path = future_to_file[future]
@@ -469,13 +538,60 @@ class AudioProcessor(MediaProcessor):
                         should_process = future.result()
                         if should_process:
                             files_to_process.append(file_path)
-                        
+
                         # Update progress with current file being checked
                         progress.set_description(f"Checked {file_path.stem[:20]}...")
                     except Exception as e:
                         self.logger.warning(f"Failed to analyze {file_path}: {e}")
                     finally:
                         progress.update(1)
-        
+
         self.logger.info(f"Analysis complete: {len(files_to_process)}/{len(all_files)} files need processing")
         return files_to_process
+
+
+def _check_thermal_throttling() -> None:
+    """
+    Check system thermal status and add delays if needed.
+
+    This function monitors CPU usage and temperature (where available)
+    and adds cooling delays if the system appears to be under thermal stress.
+    """
+    try:
+        logger = logging.getLogger(__name__)
+
+        # Check CPU usage
+        cpu_percent = psutil.cpu_percent(interval=0.1)  # Quick check
+
+        # If CPU is very high, add a cooling delay
+        if cpu_percent > 90:
+            logger.warning(f"Very high CPU usage ({cpu_percent:.1f}%), adding cooling delay...")
+            time.sleep(2.0)  # 2 second cooling delay
+        elif cpu_percent > 80:
+            logger.info(f"High CPU usage ({cpu_percent:.1f}%), adding brief cooling delay...")
+            time.sleep(0.5)  # Brief cooling delay
+
+        # Try to check temperature if available
+        try:
+            if hasattr(psutil, "sensors_temperatures"):
+                temps = psutil.sensors_temperatures()
+                if temps:
+                    max_temp = 0
+                    for name, entries in temps.items():
+                        for entry in entries:
+                            if entry.current and entry.current > max_temp:
+                                max_temp = entry.current
+
+                    if max_temp > 80:
+                        logger.warning(f"High CPU temperature ({max_temp:.1f}°C), adding extended cooling delay...")
+                        time.sleep(5.0)  # Extended cooling delay
+                    elif max_temp > 70:
+                        logger.info(f"Elevated CPU temperature ({max_temp:.1f}°C), adding cooling delay...")
+                        time.sleep(1.0)  # Moderate cooling delay
+        except Exception:
+            # Temperature monitoring not available on this system
+            pass
+
+    except Exception as e:
+        # If monitoring fails, don't crash - just log and continue
+        logging.getLogger(__name__).debug(f"Thermal monitoring failed: {e}")

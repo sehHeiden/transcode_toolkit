@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import argparse
 
-    from core import ConfigManager
+    from ...core import ConfigManager
 
 LOG = logging.getLogger(__name__)
 
@@ -28,7 +28,9 @@ class AudioCommands:
         # Transcode command
         transcode_parser = subparsers.add_parser("transcode", help="Transcode audio files")
         transcode_parser.add_argument("path", type=Path, help="Path to audio file or directory")
-        transcode_parser.add_argument("--preset", "-p", default="music", type=str.lower, help="Audio preset to use (case-insensitive)")
+        transcode_parser.add_argument(
+            "--preset", "-p", default="music", type=str.lower, help="Audio preset to use (case-insensitive)"
+        )
         transcode_parser.add_argument(
             "--recursive",
             "-r",
@@ -40,7 +42,12 @@ class AudioCommands:
         # Estimate command
         estimate_parser = subparsers.add_parser("estimate", help="Estimate size savings")
         estimate_parser.add_argument("path", type=Path, help="Path to audio file or directory")
-        estimate_parser.add_argument("--preset", "-p", type=str.lower, help="Specific audio preset to analyze (case-insensitive, default: compare all)")
+        estimate_parser.add_argument(
+            "--preset",
+            "-p",
+            type=str.lower,
+            help="Specific audio preset to analyze (case-insensitive, default: compare all)",
+        )
         estimate_parser.add_argument(
             "--no-compare",
             action="store_true",
@@ -64,7 +71,7 @@ class AudioCommands:
     def _handle_transcode(self, args: argparse.Namespace) -> int:
         """Handle audio transcoding."""
         try:
-            from processors import AudioProcessor
+            from ...processors import AudioProcessor
 
             processor = AudioProcessor(self.config_manager)
 
@@ -87,7 +94,7 @@ class AudioCommands:
     def _handle_estimate(self, args: argparse.Namespace) -> int:
         """Handle audio size estimation."""
         try:
-            from audio import estimate
+            from ...audio import estimate
 
             # Default to comparison mode unless --no-compare is used with a specific preset
             if args.no_compare and args.preset:

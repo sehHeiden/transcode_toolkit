@@ -141,9 +141,10 @@ video:
 
 # Global settings
 global:
-  # Default number of worker threads (null = auto-detect with safe limits)
-  # Auto-detection uses psutil to identify physical cores and ensures we never
-  # use all physical cores to keep the system responsive
+  # Default number of worker threads (null = auto-detect with thermal-safe limits)
+  # Auto-detection uses psutil to monitor system load and temperature,
+  # ensuring we don't use too many cores that could cause thermal issues
+  # For thermal safety, auto-detection caps at 4 workers and uses half the physical cores
   default_workers: null
   
   # Logging levels: DEBUG, INFO, WARNING, ERROR

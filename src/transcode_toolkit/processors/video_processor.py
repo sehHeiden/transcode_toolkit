@@ -6,8 +6,8 @@ import logging
 import tempfile
 from pathlib import Path
 
-from core import BackupStrategy, FileManager, MediaProcessor, ProcessingResult, ProcessingStatus
-from video import transcode
+from ..core import BackupStrategy, FileManager, MediaProcessor, ProcessingResult, ProcessingStatus
+from ..video import transcode
 
 LOG = logging.getLogger(__name__)
 

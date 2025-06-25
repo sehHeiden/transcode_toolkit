@@ -6,7 +6,7 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -107,15 +107,3 @@ class MediaProcessor(ABC):
                 )
 
         return results
-
-
-class Estimator(Protocol):
-    """Protocol for size estimation."""
-
-    def estimate_size(self, file_path: Path, **kwargs) -> int:
-        """Estimate the size after processing."""
-        ...
-
-    def estimate_directory(self, directory: Path, **kwargs) -> dict[str, Any]:
-        """Estimate sizes for all files in directory."""
-        ...

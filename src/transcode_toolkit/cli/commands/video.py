@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import argparse
 
-    from core import ConfigManager
+    from ...core import ConfigManager
 
 LOG = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ class VideoCommands:
     def _handle_transcode(self, args: argparse.Namespace) -> int:
         """Handle video transcoding."""
         try:
-            from processors import VideoProcessor
+            from ...processors import VideoProcessor
 
             processor = VideoProcessor()
 
@@ -81,7 +81,7 @@ class VideoCommands:
     def _handle_estimate(self, args: argparse.Namespace) -> int:
         """Handle video size estimation."""
         try:
-            from video import estimate
+            from ...video import estimate
 
             rows = estimate.analyse(args.path)
             estimate.print_summary(rows, csv_path=args.csv)

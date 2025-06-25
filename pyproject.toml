@@ -29,6 +29,7 @@ dev = [
     "types-psutil>=6.1.0",
     "types-pyyaml>=6.0.12.20250516",
     "types-tqdm>=4.67.0.20250516",
+    "vulture>=2.14",
 ]
 
 [tool.ruff]
@@ -69,3 +70,9 @@ lint.unfixable = []
 
 [tool.mypy]
 ignore_missing_imports = true
+explicit_package_bases = true
+mypy_path = "src"
+namespace_packages = true
+exclude = [
+    "tests/.*",
+]

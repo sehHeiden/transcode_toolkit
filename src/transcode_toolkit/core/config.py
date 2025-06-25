@@ -4,18 +4,16 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any
 
 # Import the existing config system and extend it
-from config import MediaToolkitConfig
-from config import get_config as _get_global_config
+from ..config import MediaToolkitConfig
+from ..config import get_config as _get_global_config
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 LOG = logging.getLogger(__name__)
-
-T = TypeVar("T")
 
 
 @dataclass
@@ -102,6 +100,7 @@ class ConfigContext:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.config_manager.pop_context()
+        return False
 
 
 def with_config_overrides(config_manager: ConfigManager, **overrides) -> ConfigContext:
