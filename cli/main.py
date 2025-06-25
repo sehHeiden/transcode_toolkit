@@ -60,6 +60,9 @@ Examples:
 
   # Clean up backup files
   media-toolkit utils cleanup /path/to/media --force
+  
+  # Find duplicate files
+  media-toolkit utils duplicates /path/to/media --extensions .mp3 .flac
             """,
         )
 

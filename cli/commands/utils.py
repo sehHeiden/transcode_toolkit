@@ -32,6 +32,14 @@ class UtilityCommands:
 
         # Info command
         subparsers.add_parser("info", help="Show configuration and system info")
+        
+        # Duplicate detection command
+        duplicates_parser = subparsers.add_parser("duplicates", help="Find duplicate files")
+        duplicates_parser.add_argument("paths", nargs="+", type=Path, help="Paths to search for duplicates")
+        duplicates_parser.add_argument("--extensions", nargs="*", help="File extensions to include (e.g., .mp3 .flac)")
+        duplicates_parser.add_argument("--workers", type=int, help="Number of parallel workers for hash calculation")
+        duplicates_parser.add_argument("--summary-only", action="store_true", help="Show only summary statistics")
+        duplicates_parser.add_argument("--output", type=Path, help="Save detailed results to file")
 
     def handle_command(self, args: argparse.Namespace) -> int:
         """Handle utility command execution."""
@@ -43,6 +51,8 @@ class UtilityCommands:
             return self._handle_cleanup(args)
         if args.util_command == "info":
             return self._handle_info(args)
+        if args.util_command == "duplicates":
+            return self._handle_duplicates(args)
         LOG.error(f"Unknown utility command: {args.util_command}")
         return 1
 
@@ -119,4 +129,118 @@ class UtilityCommands:
 
         except Exception as e:
             LOG.exception(f"Info display failed: {e}")
+            return 1
+    
+    def _handle_duplicates(self, args: argparse.Namespace) -> int:
+        """Handle duplicate file detection."""
+        try:
+            from core import DuplicateFinder
+            import json
+            import time
+            
+            # Validate input paths
+            for path in args.paths:
+                if not path.exists():
+                    LOG.error(f"Path does not exist: {path}")
+                    return 1
+            
+            # Prepare extensions set
+            extensions = None
+            if args.extensions:
+                extensions = {ext if ext.startswith('.') else f'.{ext}' for ext in args.extensions}
+                LOG.info(f"Filtering by extensions: {extensions}")
+            
+            # Initialize duplicate finder
+            max_workers = args.workers
+            if max_workers:
+                LOG.info(f"Using {max_workers} parallel workers")
+            
+            finder = DuplicateFinder(max_workers=max_workers)
+            
+            # Progress callback for user feedback
+            last_update = 0
+            def progress_callback(message: str):
+                nonlocal last_update
+                current_time = time.time()
+                if current_time - last_update > 1.0:  # Update every second
+                    print(f"Progress: {message}")
+                    last_update = current_time
+            
+            print("Starting duplicate file search...")
+            start_time = time.time()
+            
+            # Find duplicates
+            duplicates = finder.find_duplicates(
+                paths=args.paths,
+                extensions=extensions,
+                progress_callback=progress_callback
+            )
+            
+            elapsed_time = time.time() - start_time
+            
+            # Get summary
+            summary = finder.get_duplicate_summary(duplicates)
+            
+            # Display results
+            print("\n=== Duplicate Detection Complete ===")
+            print(f"Search completed in {elapsed_time:.1f} seconds")
+            print(f"Found {summary['total_groups']} duplicate groups containing {summary['total_files']} files")
+            
+            if summary['wasted_space'] > 0:
+                wasted_mb = summary['wasted_space'] / (1024 * 1024)
+                wasted_gb = wasted_mb / 1024
+                if wasted_gb > 1:
+                    print(f"Estimated wasted space: {wasted_gb:.2f} GB")
+                else:
+                    print(f"Estimated wasted space: {wasted_mb:.1f} MB")
+            
+            if not duplicates:
+                print("No duplicate files found.")
+                return 0
+            
+            # Output detailed results
+            if not args.summary_only:
+                print("\n=== Duplicate Groups ===")
+                for i, group in enumerate(summary['groups'][:10], 1):  # Show top 10 groups
+                    size_mb = group['size_each'] / (1024 * 1024)
+                    wasted_mb = group['wasted_space'] / (1024 * 1024)
+                    
+                    print(f"\nGroup {i}: {group['count']} files ({size_mb:.1f} MB each, {wasted_mb:.1f} MB wasted)")
+                    print(f"Hash: {group['hash']}")
+                    for file_path in group['files']:
+                        print(f"  {file_path}")
+                
+                if len(summary['groups']) > 10:
+                    print(f"\n... and {len(summary['groups']) - 10} more groups")
+                    print("Use --summary-only to show only statistics")
+            
+            # Save to file if requested
+            if args.output:
+                try:
+                    output_data = {
+                        'search_info': {
+                            'paths': [str(p) for p in args.paths],
+                            'extensions': list(extensions) if extensions else None,
+                            'search_time': elapsed_time,
+                            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+                        },
+                        'summary': summary,
+                        'duplicates': {hash_val: [str(p) for p in paths] for hash_val, paths in duplicates.items()}
+                    }
+                    
+                    with args.output.open('w', encoding='utf-8') as f:
+                        json.dump(output_data, f, indent=2, ensure_ascii=False)
+                    
+                    print(f"\nDetailed results saved to: {args.output}")
+                    
+                except Exception as e:
+                    LOG.warning(f"Failed to save results to file: {e}")
+            
+            return 0
+            
+        except KeyboardInterrupt:
+            print("\nDuplicate search cancelled by user")
+            return 130
+        except Exception as e:
+            LOG.exception(f"Duplicate detection failed: {e}")
             return 1
