@@ -53,7 +53,9 @@ class AudioCommands:
             "--preset", help="Specific audio preset to analyze (default: compare all)"
         )
         estimate_parser.add_argument(
-            "--no-compare", action="store_true", help="Skip comparison and use specific preset only"
+            "--no-compare",
+            action="store_true",
+            help="Skip comparison and use specific preset only",
         )
         estimate_parser.add_argument("--csv", help="Save results to CSV file")
 
@@ -122,10 +124,12 @@ class AudioCommands:
                 results = estimate.compare_presets(args.path)
                 recommended = estimate.recommend_preset(results)
                 estimate.print_comparison(results, recommended)
-                
+
                 # Show usage tip
-                print(f"\n💡 To convert with recommended settings:")
-                print(f"   python main.py audio transcode '{args.path}' --preset {recommended}")
+                print("\n💡 To convert with recommended settings:")
+                print(
+                    f"   python main.py audio transcode '{args.path}' --preset {recommended}"
+                )
 
             return 0
 

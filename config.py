@@ -116,12 +116,14 @@ class MediaToolkitConfig:
     def list_audio_presets(self) -> list[str]:
         """Get list of available audio preset names."""
         return list(self.audio.presets.keys())
-    
+
     def get_audio_preset(self, preset_name: str) -> AudioPreset:
         """Get an audio preset by name."""
         if preset_name not in self.audio.presets:
             available = ", ".join(self.list_audio_presets())
-            raise ValueError(f"Unknown audio preset '{preset_name}'. Available: {available}")
+            raise ValueError(
+                f"Unknown audio preset '{preset_name}'. Available: {available}"
+            )
         return self.audio.presets[preset_name]
 
     @classmethod

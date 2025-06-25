@@ -92,7 +92,9 @@ video:
 
 # Global settings
 global:
-  # Default number of worker threads (null = auto-detect)
+  # Default number of worker threads (null = auto-detect with safe limits)
+  # Auto-detection uses psutil to identify physical cores and ensures we never
+  # use all physical cores to keep the system responsive
   default_workers: null
   
   # Logging levels: DEBUG, INFO, WARNING, ERROR

@@ -7,6 +7,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List
 
+import psutil
+from tqdm import tqdm
+
 from core import (
     MediaProcessor,
     ProcessingResult,
@@ -19,6 +22,49 @@ from core import (
     FileManager,
     BackupStrategy,
 )
+
+
+def get_safe_worker_count(configured_workers: int | None) -> int:
+    """Get a safe number of workers that doesn't overwhelm the system.
+
+    Uses psutil to properly differentiate between physical and logical cores,
+    ensuring we don't use all physical cores to keep the system responsive.
+
+    Args:
+        configured_workers: The configured worker count, or None for auto-detection
+
+    Returns:
+        Safe number of workers that avoids using all physical cores
+    """
+    if configured_workers is not None and configured_workers > 0:
+        return configured_workers
+
+    # Get actual core counts using psutil
+    try:
+        physical_cores = psutil.cpu_count(logical=False) or 1
+        logical_cores = psutil.cpu_count(logical=True) or 1
+
+        # Conservative approach: use at most (physical_cores - 1) workers
+        # This ensures we always leave at least one full physical core free
+        # for the system and other processes
+        max_workers = max(1, physical_cores - 1)
+
+        # Cap at 8 workers to avoid excessive context switching overhead
+        max_workers = min(max_workers, 8)
+
+        logging.getLogger(__name__).info(
+            f"Detected {physical_cores} physical cores, {logical_cores} logical cores. "
+            f"Using {max_workers} workers (leaving {physical_cores - max_workers} physical cores free)."
+        )
+
+        return max_workers
+
+    except Exception as e:
+        # Fallback if psutil fails
+        logging.getLogger(__name__).warning(
+            f"Failed to detect CPU cores with psutil: {e}. Using fallback of 2 workers."
+        )
+        return 2
 
 
 class AudioProcessor(MediaProcessor):
@@ -57,14 +103,20 @@ class AudioProcessor(MediaProcessor):
                     current_bps = int(audio_info["bitrate"])
                     # Allow reprocessing if current bitrate is significantly higher
                     if current_bps > target_bps * 1.2:  # 20% tolerance for Opus→Opus
-                        self.logger.info(f"Will reprocess {file_path.name}: Opus {current_bps/1000:.0f}k → {target_bps/1000:.0f}k")
+                        self.logger.info(
+                            f"Will reprocess {file_path.name}: Opus {current_bps / 1000:.0f}k → {target_bps / 1000:.0f}k"
+                        )
                         return True
                     else:
-                        self.logger.info(f"Skipping {file_path.name}: Already optimal Opus ({current_bps/1000:.0f}k vs target {target_bps/1000:.0f}k)")
+                        self.logger.info(
+                            f"Skipping {file_path.name}: Already optimal Opus ({current_bps / 1000:.0f}k vs target {target_bps / 1000:.0f}k)"
+                        )
                         return False
                 else:
                     # If bitrate is unknown, conservatively skip
-                    self.logger.info(f"Skipping {file_path.name}: Already Opus format (bitrate unknown)")
+                    self.logger.info(
+                        f"Skipping {file_path.name}: Already Opus format (bitrate unknown)"
+                    )
                     return False
 
             return True
@@ -196,23 +248,37 @@ class AudioProcessor(MediaProcessor):
         # Extract parameters from kwargs
         preset = kwargs.pop("preset", "music")  # Remove from kwargs to avoid conflicts
         max_workers = kwargs.pop("max_workers", None)  # Remove from kwargs
-        
+
         # Get worker count from config if not specified
         if max_workers is None:
-            max_workers = self.config_manager.get_value("global_.default_workers")
+            configured_workers = self.config_manager.get_value(
+                "global_.default_workers"
+            )
+            max_workers = get_safe_worker_count(configured_workers)
+        else:
+            # Even if specified, ensure it's safe
+            max_workers = get_safe_worker_count(max_workers)
 
         # Clean up old backups first
         self.file_manager.cleanup_old_backups(directory)
 
         # Get all compatible files
         pattern = "**/*" if recursive else "*"
-        files = [
+        files = list(
             f
             for f in directory.glob(pattern)
             if f.is_file()
             and self.can_process(f)
             and self.should_process(f, preset=preset, **kwargs)
-        ]
+        )
+
+        # Initialize progress bar with more details
+        progress_bar = tqdm(
+            total=len(files),
+            desc="Processing Files",
+            unit="file",
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
+        )
 
         self.logger.info(f"Processing {len(files)} audio files with preset '{preset}'")
 
@@ -222,8 +288,10 @@ class AudioProcessor(MediaProcessor):
             if max_workers == 1:
                 # Single-threaded processing
                 for file_path in files:
+                    progress_bar.set_description(f"Processing {file_path.name}")
                     result = self.process_file(file_path, preset=preset, **kwargs)
                     results.append(result)
+                    progress_bar.update(1)
             else:
                 # Multi-threaded processing
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -235,11 +303,24 @@ class AudioProcessor(MediaProcessor):
                     }
 
                     for future in as_completed(future_to_file):
+                        file_path = future_to_file[future]
                         try:
                             result = future.result()
                             results.append(result)
+                            # Update description with completion status
+                            if result.status == ProcessingStatus.SUCCESS:
+                                progress_bar.set_description(
+                                    f"✓ Completed {file_path.name}"
+                                )
+                            elif result.status == ProcessingStatus.SKIPPED:
+                                progress_bar.set_description(
+                                    f"⏭ Skipped {file_path.name}"
+                                )
+                            else:
+                                progress_bar.set_description(
+                                    f"✗ Error {file_path.name}"
+                                )
                         except Exception as e:
-                            file_path = future_to_file[future]
                             self.logger.error(f"Error processing {file_path}: {e}")
                             results.append(
                                 ProcessingResult(
@@ -248,7 +329,13 @@ class AudioProcessor(MediaProcessor):
                                     message=f"Threading error: {e}",
                                 )
                             )
+                            progress_bar.set_description(f"✗ Error {file_path.name}")
+                        finally:
+                            progress_bar.update(1)
         finally:
+            # Close progress bar
+            progress_bar.close()
+
             # Always clean up session backups
             self.file_manager.cleanup_session_backups()
 
