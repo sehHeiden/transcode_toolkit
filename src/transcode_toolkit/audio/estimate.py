@@ -14,7 +14,7 @@ from typing import Any, NamedTuple
 import psutil
 from tqdm import tqdm
 
-from transcode_toolkit.config import get_config
+from ..config import get_config
 
 
 class EstimationResult(NamedTuple):
@@ -78,7 +78,7 @@ def _probe(path: Path) -> dict[str, Any]:
 
 def _estimate_folder_snr(folder: Path, audio_files: list[Path]) -> float:
     """Estimate representative SNR for an entire folder by smart sampling."""
-    from transcode_toolkit.core import FFmpegProbe
+    from ..core import FFmpegProbe
 
     total_files = len(audio_files)
     if total_files == 0:
@@ -257,8 +257,8 @@ def compare_presets(root: Path) -> list[EstimationResult]:
     def get_complete_file_info(file_path):
         """Get both basic metadata and bitrate info in one FFprobe call."""
         try:
-            from transcode_toolkit.core import FFmpegProbe
-            from transcode_toolkit.core.ffmpeg import FFmpegError
+            from ..core import FFmpegProbe
+            from ..core.ffmpeg import FFmpegError
 
             # Use FFmpegProbe.get_audio_info which gets everything we need
             audio_info = FFmpegProbe.get_audio_info(file_path)
@@ -326,7 +326,7 @@ def compare_presets(root: Path) -> list[EstimationResult]:
     start_time = time.time()
 
     # Temporarily disable FFmpeg warnings during bulk processing
-    ffmpeg_logger = logging.getLogger("transcode_toolkit.core.ffmpeg")
+    ffmpeg_logger = logging.getLogger("..core.ffmpeg")
     original_level = ffmpeg_logger.level
     ffmpeg_logger.setLevel(logging.ERROR)  # Only show errors, suppress warnings
 

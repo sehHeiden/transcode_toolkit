@@ -71,7 +71,7 @@ class AudioCommands:
     def _handle_transcode(self, args: argparse.Namespace) -> int:
         """Handle audio transcoding."""
         try:
-            from transcode_toolkit.processors import AudioProcessor
+            from ...processors import AudioProcessor
 
             processor = AudioProcessor(self.config_manager)
 
@@ -94,7 +94,7 @@ class AudioCommands:
     def _handle_estimate(self, args: argparse.Namespace) -> int:
         """Handle audio size estimation."""
         try:
-            from transcode_toolkit.audio import estimate
+            from ...audio import estimate
 
             # Default to comparison mode unless --no-compare is used with a specific preset
             if args.no_compare and args.preset:
