@@ -27,8 +27,8 @@ class VideoCommands:
         # Transcode command
         transcode_parser = subparsers.add_parser("transcode", help="Transcode video files")
         transcode_parser.add_argument("path", type=Path, help="Path to video file or directory")
-        transcode_parser.add_argument("--crf", type=int, default=24, help="Constant Rate Factor (quality)")
-        transcode_parser.add_argument("--gpu", action="store_true", help="Use GPU acceleration")
+        transcode_parser.add_argument("--crf", "-c", type=int, default=24, help="Constant Rate Factor (quality)")
+        transcode_parser.add_argument("--gpu", "-g", action="store_true", help="Use GPU acceleration")
         transcode_parser.add_argument(
             "--recursive",
             "-r",

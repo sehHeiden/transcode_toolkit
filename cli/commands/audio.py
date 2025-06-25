@@ -28,7 +28,7 @@ class AudioCommands:
         # Transcode command
         transcode_parser = subparsers.add_parser("transcode", help="Transcode audio files")
         transcode_parser.add_argument("path", type=Path, help="Path to audio file or directory")
-        transcode_parser.add_argument("--preset", default="music", help="Audio preset to use")
+        transcode_parser.add_argument("--preset", "-p", default="music", type=str.lower, help="Audio preset to use (case-insensitive)")
         transcode_parser.add_argument(
             "--recursive",
             "-r",
@@ -40,7 +40,7 @@ class AudioCommands:
         # Estimate command
         estimate_parser = subparsers.add_parser("estimate", help="Estimate size savings")
         estimate_parser.add_argument("path", type=Path, help="Path to audio file or directory")
-        estimate_parser.add_argument("--preset", help="Specific audio preset to analyze (default: compare all)")
+        estimate_parser.add_argument("--preset", "-p", type=str.lower, help="Specific audio preset to analyze (case-insensitive, default: compare all)")
         estimate_parser.add_argument(
             "--no-compare",
             action="store_true",

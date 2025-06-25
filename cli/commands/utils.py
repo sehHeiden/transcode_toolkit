@@ -27,8 +27,8 @@ class UtilityCommands:
         # Cleanup command
         cleanup_parser = subparsers.add_parser("cleanup", help="Clean up backup files")
         cleanup_parser.add_argument("path", type=Path, help="Path to directory")
-        cleanup_parser.add_argument("--force", action="store_true", help="Force removal of all backup files")
-        cleanup_parser.add_argument("--dry-run", action="store_true", help="Show what would be deleted")
+        cleanup_parser.add_argument("--force", "-f", action="store_true", help="Force removal of all backup files")
+        cleanup_parser.add_argument("--dry-run", "-n", action="store_true", help="Show what would be deleted")
 
         # Info command
         subparsers.add_parser("info", help="Show configuration and system info")
@@ -37,9 +37,9 @@ class UtilityCommands:
         duplicates_parser = subparsers.add_parser("duplicates", help="Find duplicate files")
         duplicates_parser.add_argument("paths", nargs="+", type=Path, help="Paths to search for duplicates")
         duplicates_parser.add_argument("--extensions", nargs="*", help="File extensions to include (e.g., .mp3 .flac)")
-        duplicates_parser.add_argument("--workers", type=int, help="Number of parallel workers for hash calculation")
-        duplicates_parser.add_argument("--summary-only", action="store_true", help="Show only summary statistics")
-        duplicates_parser.add_argument("--output", type=Path, help="Save detailed results to file")
+        duplicates_parser.add_argument("--workers", "-w", type=int, help="Number of parallel workers for hash calculation")
+        duplicates_parser.add_argument("--summary-only", "-s", action="store_true", help="Show only summary statistics")
+        duplicates_parser.add_argument("--output", "-o", type=Path, help="Save detailed results to file")
 
     def handle_command(self, args: argparse.Namespace) -> int:
         """Handle utility command execution."""

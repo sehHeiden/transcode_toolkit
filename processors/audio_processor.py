@@ -139,7 +139,8 @@ class AudioProcessor(MediaProcessor):
             temp_file = file_path.with_suffix(".tmp.opus")
 
             # Determine effective bitrate using SNR-based intelligent limiting
-            effective_bitrate = self._calculate_effective_bitrate(file_path, audio_info, preset_config)
+            folder_snr = kwargs.get("folder_snr")
+            effective_bitrate = self._calculate_effective_bitrate(file_path, audio_info, preset_config, folder_snr)
 
             # Build and run FFmpeg command
             command = self.ffmpeg.build_audio_command(
@@ -251,15 +252,28 @@ class AudioProcessor(MediaProcessor):
 
         # Note: Backup cleanup is now handled only at session end for successful operations
 
-        # Get all compatible files
+        # Get all compatible files with progress feedback
         pattern = "**/*" if recursive else "*"
-        files = [
-            f
-            for f in directory.glob(pattern)
-            if f.is_file() and self.can_process(f) and self.should_process(f, preset=preset, **kwargs)
-        ]
+        self.logger.info(f"Scanning directory: {directory} (recursive: {recursive})")
+        
+        # First pass: find all audio files
+        all_files = [f for f in directory.glob(pattern) if f.is_file() and self.can_process(f)]
+        self.logger.info(f"Found {len(all_files)} audio files to analyze")
+        
+        # Second pass: filter files that need processing with multicore analysis
+        files = self._analyze_files_parallel(all_files, preset, max_workers, **kwargs)
 
         # Initialize progress bar with more details
+        # Pre-compute folder SNR once per directory so each thread can reuse it
+        from collections import defaultdict
+        from core.audio_analysis import analyze_folder_snr
+        folder_map: dict[Path, list[Path]] = defaultdict(list)
+        for f in all_files:
+            folder_map[f.parent].append(f)
+        folder_snr_cache: dict[Path, float] = {}
+        for folder, files_in_dir in folder_map.items():
+            folder_snr_cache[folder] = analyze_folder_snr(folder, files_in_dir)
+
         progress_bar = tqdm(
             total=len(files),
             desc="Processing Files",
@@ -276,14 +290,25 @@ class AudioProcessor(MediaProcessor):
                 # Single-threaded processing
                 for file_path in files:
                     progress_bar.set_description(f"Processing {file_path.name}")
-                    result = self.process_file(file_path, preset=preset, **kwargs)
+                    result = self.process_file(
+                        file_path,
+                        preset=preset,
+                        folder_snr=folder_snr_cache[file_path.parent],
+                        **kwargs,
+                    )
                     results.append(result)
                     progress_bar.update(1)
             else:
                 # Multi-threaded processing
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
                     future_to_file = {
-                        executor.submit(self.process_file, file_path, preset=preset, **kwargs): file_path
+                        executor.submit(
+                            self.process_file,
+                            file_path,
+                            preset=preset,
+                            folder_snr=folder_snr_cache[file_path.parent],
+                            **kwargs,
+                        ): file_path
                         for file_path in files
                     }
 
@@ -328,7 +353,7 @@ class AudioProcessor(MediaProcessor):
 
         return results
 
-    def _calculate_effective_bitrate(self, file_path: Path, audio_info: dict[str, Any], preset_config) -> str:
+    def _calculate_effective_bitrate(self, file_path: Path, audio_info: dict[str, Any], preset_config, folder_snr: float | None = None) -> str:
         """
         Calculate effective bitrate using SNR-based intelligent limiting.
 
@@ -359,7 +384,7 @@ class AudioProcessor(MediaProcessor):
             return preset_config.bitrate
 
         # SNR scaling enabled - calculate effective bitrate
-        estimated_snr = FFmpegProbe.estimate_snr(file_path, audio_info)
+        estimated_snr = folder_snr if folder_snr is not None else FFmpegProbe.estimate_snr(file_path, audio_info)
         self.logger.debug(f"Estimated SNR for {file_path.name}: {estimated_snr:.1f} dB")
 
         # Calculate SNR-adjusted bitrate if below threshold
@@ -400,3 +425,57 @@ class AudioProcessor(MediaProcessor):
             self.logger.debug(f"Using preset bitrate for {file_path.name}: {preset_config.bitrate}")
 
         return effective_bitrate
+
+    def _analyze_files_parallel(self, all_files: list[Path], preset: str, max_workers: int, **kwargs) -> list[Path]:
+        """
+        Analyze files in parallel to determine which ones need processing.
+        
+        This parallelizes the should_process check which involves FFmpeg calls.
+        """
+        files_to_process = []
+        
+        if len(all_files) <= 20:
+            # For small sets, use sequential processing (overhead isn't worth it)
+            for file_path in all_files:
+                if self.should_process(file_path, preset=preset, **kwargs):
+                    files_to_process.append(file_path)
+            self.logger.info(f"Analysis complete: {len(files_to_process)}/{len(all_files)} files need processing")
+            return files_to_process
+        
+        # For larger sets, use parallel analysis
+        analysis_workers = min(max_workers, len(all_files) // 4)  # Don't use too many workers for analysis
+        analysis_workers = max(1, analysis_workers)
+        
+        self.logger.info(f"Analyzing {len(all_files)} files using {analysis_workers} workers...")
+        
+        with tqdm(
+            total=len(all_files),
+            desc="Analyzing files",
+            unit="file",
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]"
+        ) as progress:
+            
+            with ThreadPoolExecutor(max_workers=analysis_workers) as executor:
+                # Submit all analysis tasks
+                future_to_file = {
+                    executor.submit(self.should_process, file_path, preset=preset, **kwargs): file_path
+                    for file_path in all_files
+                }
+                
+                # Collect results as they complete
+                for future in as_completed(future_to_file):
+                    file_path = future_to_file[future]
+                    try:
+                        should_process = future.result()
+                        if should_process:
+                            files_to_process.append(file_path)
+                        
+                        # Update progress with current file being checked
+                        progress.set_description(f"Checked {file_path.stem[:20]}...")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to analyze {file_path}: {e}")
+                    finally:
+                        progress.update(1)
+        
+        self.logger.info(f"Analysis complete: {len(files_to_process)}/{len(all_files)} files need processing")
+        return files_to_process
