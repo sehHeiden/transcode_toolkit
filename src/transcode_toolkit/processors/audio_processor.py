@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 import psutil
 from tqdm import tqdm
 
-from transcode_toolkit.core import (
+from ..core import (
     BackupStrategy,
     ConfigManager,
     FFmpegError,

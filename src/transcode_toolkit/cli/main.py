@@ -7,7 +7,7 @@ import logging
 import sys
 from pathlib import Path
 
-from transcode_toolkit.core import ConfigManager, ProcessingOptions, with_config_overrides
+from ..core import ConfigManager, ProcessingOptions, with_config_overrides
 
 from .commands import AudioCommands, UtilityCommands, VideoCommands
 

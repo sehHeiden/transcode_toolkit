@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 # Import the existing config system and extend it
-from transcode_toolkit.config import MediaToolkitConfig
-from transcode_toolkit.config import get_config as _get_global_config
+from ..config import MediaToolkitConfig
+from ..config import get_config as _get_global_config
 
 if TYPE_CHECKING:
     from pathlib import Path
