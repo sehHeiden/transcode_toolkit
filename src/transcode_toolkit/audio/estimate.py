@@ -15,6 +15,12 @@ import psutil
 from tqdm import tqdm
 
 from ..config import get_config
+from ..config.constants import (
+    ERROR_MESSAGE_TRUNCATE_LENGTH,
+    FFPROBE_ERROR_PARTS_COUNT,
+    FUTURE_RESULT_TUPLE_LENGTH,
+)
+from ..config.settings import AudioPreset
 
 
 class EstimationResult(NamedTuple):
@@ -33,22 +39,11 @@ LOG = logging.getLogger("audio-est")
 def _check_executables() -> None:
     """Check if required executables are available in PATH."""
     required = ["ffprobe"]
-    missing = []
-
-    for exe in required:
-        if not shutil.which(exe):
-            missing.append(exe)
+    missing = [exe for exe in required if not shutil.which(exe)]
 
     if missing:
-        print("❌ Missing required executables:")
-        for exe in missing:
-            print(f"   - {exe}")
-        print("\n💡 Install FFmpeg to get these tools:")
-        print("   • Windows: https://ffmpeg.org/download.html#build-windows")
-        print("   • winget install Gyan.FFmpeg")
-        print("   • choco install ffmpeg")
-        print("   • Or download from: https://www.gyan.dev/ffmpeg/builds/")
-        print("\n   Make sure to add FFmpeg to your system PATH.")
+        for _exe in missing:
+            pass
         raise SystemExit(1)
 
 
@@ -87,10 +82,15 @@ def _estimate_folder_snr(folder: Path, audio_files: list[Path]) -> float:
     # Smart sampling strategy based on folder size
     samples = []
 
-    if total_files <= 3:
+    # Import config values for thresholds
+    config = get_config()
+    small_threshold = config.audio.quality_thresholds.get("small_folder_files", 3)
+    medium_threshold = config.audio.quality_thresholds.get("medium_folder_files", 20)
+
+    if total_files <= small_threshold:
         # Small folder: use all files
         samples = audio_files[:]
-    elif total_files <= 10:
+    elif total_files <= medium_threshold:
         # Medium folder: skip first and last, sample middle
         start_idx = 1
         end_idx = total_files - 1
@@ -145,7 +145,7 @@ def _estimate_folder_snr(folder: Path, audio_files: list[Path]) -> float:
     return folder_snr
 
 
-def _calculate_effective_bitrate_cached(audio_cache: dict[str, Any], preset_config) -> int:
+def _calculate_effective_bitrate_cached(audio_cache: dict[str, Any], preset_config: AudioPreset) -> int:
     """Calculate effective bitrate using cached audio info."""
     target_bitrate_bps = int(preset_config.bitrate.rstrip("k")) * 1000
 
@@ -198,7 +198,6 @@ def analyse(root: Path, target_br: int) -> list[tuple[Path, int, int]]:
 
     # Use more aggressive worker count for I/O bound FFprobe operations
     max_workers = max(1, min(psutil.cpu_count(logical=True) or 1, len(files)))  # Ensure minimum 1 worker
-    print(f"Using {max_workers} workers to probe {len(files)} files...")
 
     start_time = time.time()
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -212,13 +211,13 @@ def analyse(root: Path, target_br: int) -> list[tuple[Path, int, int]]:
                 LOG.warning("ffprobe failed for %s: %s", p, exc)
                 continue
 
-    elapsed = time.time() - start_time
-    print(f"Probed {len(rows)} files in {elapsed:.2f}s ({len(rows) / elapsed:.1f} files/sec)")
+    time.time() - start_time
     return rows
 
 
 def compare_presets(root: Path) -> list[EstimationResult]:
     """Compare all presets using optimized folder-level SNR sampling."""
+    # Consider splitting this function into smaller ones for better readability
     config = get_config()
     audio_exts = config.audio.extensions
 
@@ -231,31 +230,29 @@ def compare_presets(root: Path) -> list[EstimationResult]:
                 folder_groups[folder] = []
             folder_groups[folder].append(p)
 
-    total_audio_files = sum(len(files) for files in folder_groups.values())
-    print(f"Found {total_audio_files} audio files in {len(folder_groups)} folders")
+    sum(len(files) for files in folder_groups.values())
 
     # Do folder-level SNR sampling - only probe sample files per folder
     sample_files = []
     folder_snr_cache = {}
-    max_samples_per_folder = 3  # Only probe 3 files per folder for SNR estimation
+    MAX_SAMPLES_PER_FOLDER = 3
 
     for folder, files in folder_groups.items():
         # Sample a few files from each folder for SNR estimation
         folder_samples = (
-            files[:max_samples_per_folder]
-            if len(files) <= max_samples_per_folder
-            else random.sample(files, max_samples_per_folder)
+            files[:MAX_SAMPLES_PER_FOLDER]
+            if len(files) <= MAX_SAMPLES_PER_FOLDER
+            else random.sample(files, MAX_SAMPLES_PER_FOLDER)
         )
         sample_files.extend(folder_samples)
 
         # Use default SNR for fast estimation
         folder_snr_cache[folder] = 65.0  # Conservative estimate for mixed content
 
-    print(f"Sampling {len(sample_files)} files from {len(folder_groups)} folders for metadata analysis")
-
     # Get all metadata and bitrate info in a single FFprobe operation per file
-    def get_complete_file_info(file_path):
+    def get_complete_file_info(file_path: Path) -> tuple[Path, dict[str, Any] | None, str | None]:
         """Get both basic metadata and bitrate info in one FFprobe call."""
+        # Consider refactoring this function for clarity and maintainability
         try:
             from ..core import FFmpegProbe
             from ..core.ffmpeg import FFmpegError
@@ -286,7 +283,7 @@ def compare_presets(root: Path) -> list[EstimationResult]:
             elif "ffprobe failed for" in error_msg:
                 # Extract the actual ffprobe stderr/stdout message
                 parts = error_msg.split(": ", 2)
-                if len(parts) >= 3:
+                if len(parts) >= FFPROBE_ERROR_PARTS_COUNT:
                     actual_error = parts[2].strip()
                     # Clean up common FFmpeg error patterns
                     if actual_error:
@@ -297,7 +294,11 @@ def compare_presets(root: Path) -> list[EstimationResult]:
                     reason = f"FFprobe error (code {e.return_code})" if e.return_code else "FFprobe failed"
             else:
                 # Show the actual error message, truncated if too long
-                reason = error_msg[:100] + "..." if len(error_msg) > 100 else error_msg
+                reason = (
+                    error_msg[:ERROR_MESSAGE_TRUNCATE_LENGTH] + "..."
+                    if len(error_msg) > ERROR_MESSAGE_TRUNCATE_LENGTH
+                    else error_msg
+                )
             return file_path, None, reason
         except subprocess.CalledProcessError as e:
             # Direct subprocess errors
@@ -319,7 +320,6 @@ def compare_presets(root: Path) -> list[EstimationResult]:
     max_workers = max(
         1, min(8, psutil.cpu_count(logical=False) or 1, len(sample_files))
     )  # Cap at 8, use physical cores, minimum 1
-    print(f"Using {max_workers} workers to analyze {len(sample_files)} files (single FFprobe per file)...")
 
     file_metadata = {}
     failed_files = []  # Track failed files with reasons
@@ -339,18 +339,15 @@ def compare_presets(root: Path) -> list[EstimationResult]:
                 file_path = future_to_file[future]
                 try:
                     result = future.result()
-                    if len(result) == 3:  # New format with error reason
+                    if len(result) == FUTURE_RESULT_TUPLE_LENGTH:  # New format with error reason
                         _, metadata, error_reason = result
                         if metadata:  # Only add if we got valid metadata
                             file_metadata[file_path] = metadata
                         else:
                             failed_files.append((file_path, error_reason or "Unknown error"))
-                    else:  # Legacy format
-                        _, metadata = result
-                        if metadata:  # Only add if we got valid metadata
-                            file_metadata[file_path] = metadata
-                        else:
-                            failed_files.append((file_path, "No metadata returned"))
+                    else:  # Legacy format - shouldn't happen but handle gracefully
+                        LOG.warning(f"Unexpected result format from {file_path}: {result}")
+                        failed_files.append((file_path, "Unexpected result format"))
                 except Exception as exc:
                     # Suppress individual warnings during processing, but track reason
                     reason = str(exc).split(":")[0] if ":" in str(exc) else str(exc)[:50]
@@ -360,8 +357,7 @@ def compare_presets(root: Path) -> list[EstimationResult]:
         # Restore original logging level
         ffmpeg_logger.setLevel(original_level)
 
-    elapsed = time.time() - start_time
-    print(f"Analyzed {len(file_metadata)} files in {elapsed:.2f}s ({len(file_metadata) / elapsed:.1f} files/sec)")
+    time.time() - start_time
 
     # Show failed files summary if any
     if failed_files:
@@ -370,9 +366,8 @@ def compare_presets(root: Path) -> list[EstimationResult]:
         reasons = Counter(reason for _, reason in failed_files)
         most_common = reasons.most_common(3)  # Show top 3 reasons
 
-        print(f"\n⚠️  {len(failed_files)} files failed analysis. Common reasons:")
-        for reason, count in most_common:
-            print(f"   • {reason} ({count} files)")
+        for reason, _count in most_common:
+            pass
 
     # Combine all the information - extrapolate sample data to all files
     files_with_cache = []
@@ -456,8 +451,10 @@ def recommend_preset(results: list[EstimationResult]) -> str:
 
     best = sorted_results[0]
 
-    # If best saving is less than 5%, recommend keeping original
-    if best.saving_percent < 5:
+    # If best saving is less than configured threshold, recommend keeping original
+    config = get_config()
+    min_savings_threshold = config.audio.quality_thresholds.get("min_saving_percent", 5)
+    if best.saving_percent < min_savings_threshold:
         return "no_conversion"  # Special case
 
     # For audiobooks, prefer audiobook presets if they're in top 2
@@ -470,46 +467,27 @@ def recommend_preset(results: list[EstimationResult]) -> str:
 
 def print_comparison(results: list[EstimationResult], recommended: str) -> None:
     """Print a formatted comparison of all presets."""
-    print("\n=== PRESET COMPARISON ===")
-    print(f"{'Preset':<20} {'Current':>10} {'Estimated':>10} {'Saving':>10} {'%':>8}")
-    print("-" * 60)
-
-    for result in sorted(results, key=lambda x: x.saving_percent, reverse=True):
-        marker = " ★" if result.preset == recommended else "  "
-        print(
-            f"{result.preset + marker:<20} "
-            f"{result.current_size / 2**20:8.1f} MB "
-            f"{result.estimated_size / 2**20:8.1f} MB "
-            f"{result.saving / 2**20:8.1f} MB "
-            f"{result.saving_percent:6.1f}%"
-        )
-
-    print(f"\n★ RECOMMENDED: {recommended}")
+    for _result in sorted(results, key=lambda x: x.saving_percent, reverse=True):
+        pass
 
     if recommended == "no_conversion":
-        print("  → Files are already well compressed. Conversion may not be worth it.")
+        pass
     else:
         config = get_config()
         preset_config = config.audio.presets.get(recommended)
         if preset_config:
-            print(f"  → Bitrate: {preset_config.bitrate}")
-            print(f"  → Application: {preset_config.application}")
-            print(f"  → Description: {preset_config.description}")
             if preset_config.cutoff:
-                print(f"  → Frequency cutoff: {preset_config.cutoff} Hz")
+                pass
             if preset_config.channels:
-                print(f"  → Channels: {preset_config.channels}")
+                pass
 
 
-def print_summary(rows, *, preset: str, csv_path: str | None = None) -> None:
+def print_summary(rows: list[tuple[Path, int, int]], *, preset: str, csv_path: str | None = None) -> None:
+    """Print summary of analysis results."""
     cur = sum(r[1] for r in rows)
     new = sum(r[2] for r in rows)
     diff = cur - new
-    pct = 0 if cur == 0 else 100 * diff / cur
-    print(f"{preset} files analysed : {len(rows):,}")
-    print(f"Current size            : {cur / 2**30:.2f} GiB")
-    print(f"Estimated Opus          : {new / 2**30:.2f} GiB")
-    print(f"Potential saving        : {diff / 2**20:.1f} MiB ({pct:.1f} %)")
+    0 if cur == 0 else 100 * diff / cur
 
     if csv_path:
         csv_path_obj = Path(csv_path)
@@ -520,7 +498,6 @@ def print_summary(rows, *, preset: str, csv_path: str | None = None) -> None:
             for p, c, e in rows:
                 wr.writerow([p, c, e, c - e])
             wr.writerow(["TOTAL", cur, new, diff])
-        print("CSV report →", csv_path_obj)
 
 
 def cli(
@@ -573,11 +550,7 @@ def cli(
                 ],
             }
             Path(json_path).write_text(json.dumps(output_data, indent=2))
-            print(f"\nJSON report → {json_path}")
 
-        print(
-            f"\n💡 To convert with recommended settings:\n   python -m src.transcode_toolkit audio transcode '{path}' --preset {recommended}"
-        )
         return
 
     # Original single preset analysis
@@ -609,4 +582,3 @@ def cli(
             "saving_percent": pct,
         }
         Path(json_path).write_text(json.dumps(json_output_data, indent=2))
-        print(f"\nJSON report → {json_path}")

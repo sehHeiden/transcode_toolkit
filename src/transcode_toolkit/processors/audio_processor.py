@@ -324,7 +324,7 @@ class AudioProcessor(MediaProcessor):
         # Pre-compute folder SNR once per directory so each thread can reuse it
         from collections import defaultdict
 
-        from transcode_toolkit.core.audio_analysis import analyze_folder_snr
+        from ..core.audio_analysis import analyze_folder_snr
 
         folder_map: dict[Path, list[Path]] = defaultdict(list)
         for f in all_files:
@@ -518,12 +518,15 @@ class AudioProcessor(MediaProcessor):
 
         self.logger.info(f"Analyzing {len(all_files)} files using {analysis_workers} workers...")
 
-        with tqdm(
-            total=len(all_files),
-            desc="Analyzing files",
-            unit="file",
-            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",
-        ) as progress, ThreadPoolExecutor(max_workers=analysis_workers) as executor:
+        with (
+            tqdm(
+                total=len(all_files),
+                desc="Analyzing files",
+                unit="file",
+                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",
+            ) as progress,
+            ThreadPoolExecutor(max_workers=analysis_workers) as executor,
+        ):
             # Submit all analysis tasks
             future_to_file = {
                 executor.submit(self.should_process, file_path, preset=preset, **kwargs): file_path

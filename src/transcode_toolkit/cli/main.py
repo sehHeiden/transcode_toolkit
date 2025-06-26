@@ -7,8 +7,8 @@ import logging
 import sys
 from pathlib import Path
 
+from ..config.constants import VERBOSE_LOGGING_THRESHOLD
 from ..core import ConfigManager, ProcessingOptions, with_config_overrides
-
 from .commands import AudioCommands, UtilityCommands, VideoCommands
 
 
@@ -16,6 +16,7 @@ class MediaToolkitCLI:
     """Main CLI interface with enhanced architecture."""
 
     def __init__(self, config_path: Path | None = None) -> None:
+        """Initialize the CLI with config manager and command handlers."""
         self.config_manager = ConfigManager(config_path)
         self.audio_commands = AudioCommands(self.config_manager)
         self.video_commands = VideoCommands(self.config_manager)
@@ -33,12 +34,16 @@ class MediaToolkitCLI:
         level = level_map.get(verbosity, logging.DEBUG)
 
         # Setup enhanced logging format
-        log_format = "%(levelname)s: %(name)s: %(message)s" if verbosity >= 2 else "%(levelname)s: %(message)s"
+        log_format = (
+            "%(levelname)s: %(name)s: %(message)s"
+            if verbosity >= VERBOSE_LOGGING_THRESHOLD
+            else "%(levelname)s: %(message)s"
+        )
 
         logging.basicConfig(level=level, format=log_format, handlers=[logging.StreamHandler(sys.stderr)])
 
         # Set FFmpeg logs to higher level to reduce noise
-        if verbosity < 2:
+        if verbosity < VERBOSE_LOGGING_THRESHOLD:
             logging.getLogger("core.ffmpeg").setLevel(logging.WARNING)
 
     def build_parser(self) -> argparse.ArgumentParser:
@@ -148,9 +153,9 @@ Examples:
         except KeyboardInterrupt:
             logging.getLogger(__name__).info("Operation cancelled by user")
             return 130  # Standard exit code for SIGINT
-        except Exception as e:
-            logging.getLogger(__name__).exception(f"Unexpected error: {e}")
-            if parsed_args.verbose >= 2:
+        except Exception:
+            logging.getLogger(__name__).exception("Unexpected error")
+            if parsed_args.verbose >= VERBOSE_LOGGING_THRESHOLD:
                 import traceback
 
                 traceback.print_exc()

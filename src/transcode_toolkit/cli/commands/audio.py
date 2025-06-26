@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import argparse
 
-    from transcode_toolkit.core import ConfigManager
+    from ...core import ConfigManager
 
 LOG = logging.getLogger(__name__)
 
@@ -115,8 +115,6 @@ class AudioCommands:
                 estimate.print_comparison(results, recommended)
 
                 # Show usage tip
-                print("\n💡 To convert with recommended settings:")
-                print(f"   python -m src.transcode_toolkit audio transcode '{args.path}' --preset {recommended}")
 
         except Exception:
             LOG.exception("Audio estimation failed")

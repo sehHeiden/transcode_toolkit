@@ -18,6 +18,17 @@ if TYPE_CHECKING:
 LOG = logging.getLogger(__name__)
 
 
+def _parse_frame_rate(frame_rate_str: str) -> float:
+    """Safely parse frame rate from fraction string like '30/1' or '29.97'."""
+    try:
+        if "/" in frame_rate_str:
+            numerator, denominator = frame_rate_str.split("/", 1)
+            return float(numerator) / float(denominator) if float(denominator) != 0 else 0.0
+        return float(frame_rate_str)
+    except (ValueError, ZeroDivisionError):
+        return 0.0
+
+
 class FFmpegError(ProcessingError):
     """FFmpeg-specific error."""
 
@@ -44,11 +55,7 @@ class FFmpegProbe:
     def check_availability() -> None:
         """Check if FFmpeg tools are available."""
         required = ["ffmpeg", "ffprobe"]
-        missing = []
-
-        for exe in required:
-            if not shutil.which(exe):
-                missing.append(exe)
+        missing = [exe for exe in required if not shutil.which(exe)]
 
         if missing:
             error_msg = f"Missing FFmpeg executables: {', '.join(missing)}"
@@ -222,7 +229,7 @@ class FFmpegProbe:
             "height": stream.get("height"),
             "bitrate": stream.get("bit_rate") or format_info.get("bit_rate"),
             "duration": float(format_info.get("duration", 0)),
-            "fps": eval(stream.get("r_frame_rate", "0/1")),  # Convert fraction to float
+            "fps": _parse_frame_rate(stream.get("r_frame_rate", "0/1")),  # Convert fraction to float safely
             "size": int(format_info.get("size", file_path.stat().st_size)),
         }
 

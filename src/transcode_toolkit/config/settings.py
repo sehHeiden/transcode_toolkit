@@ -115,7 +115,7 @@ class MediaToolkitConfig:
 
             return cls._from_dict(data)
         except Exception as e:
-            LOG.warning(f"Failed to load config from {config_path}: {e}")
+            LOG.warning("Failed to load config from %s: %s", config_path, e)
             return cls()
 
     def list_audio_presets(self) -> list[str]:
@@ -149,9 +149,9 @@ class MediaToolkitConfig:
                         description=preset_data.get("description", ""),
                     )
                 else:
-                    LOG.warning(f"Incomplete audio preset data for '{name}': missing required fields")
+                    LOG.warning("Incomplete audio preset data for '%s': missing required fields", name)
             except Exception as e:
-                LOG.warning(f"Failed to load audio preset '{name}': {e}")
+                LOG.warning("Failed to load audio preset '%s': %s", name, e)
 
         audio_config = AudioConfig(
             size_keep_ratio=audio_data.get("size_keep_ratio", 0.95),

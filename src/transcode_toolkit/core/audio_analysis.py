@@ -6,6 +6,10 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from ..config.constants import (
+    AUDIO_MEDIUM_FOLDER_THRESHOLD,
+    AUDIO_SMALL_FOLDER_THRESHOLD,
+)
 from .ffmpeg import FFmpegProbe
 
 if TYPE_CHECKING:
@@ -80,9 +84,9 @@ def analyze_folder_snr(folder: Path, audio_files: list[Path], sample_percentage:
         return 60.0
 
     # Conservative sampling strategy
-    if total_files <= 5:
+    if total_files <= AUDIO_SMALL_FOLDER_THRESHOLD:
         samples = audio_files[:]  # All files
-    elif total_files <= 20:
+    elif total_files <= AUDIO_MEDIUM_FOLDER_THRESHOLD:
         samples = audio_files[1:-1]  # Skip first/last
     else:
         # Large folder: sample percentage, minimum 5 files

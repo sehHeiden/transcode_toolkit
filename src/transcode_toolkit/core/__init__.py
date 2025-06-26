@@ -5,6 +5,7 @@ from .config import ConfigManager, ProcessingOptions, with_config_overrides
 from .duplicate_finder import DuplicateFinder, FileInfo
 from .ffmpeg import FFmpegError, FFmpegProbe, FFmpegProcessor
 from .file_manager import BackupStrategy, FileManager
+from .video_analysis import QualityDecision, VideoComplexity
 
 __all__ = [
     "BackupStrategy",
@@ -20,5 +21,7 @@ __all__ = [
     "ProcessingOptions",
     "ProcessingResult",
     "ProcessingStatus",
+    "QualityDecision",
+    "VideoComplexity",
     "with_config_overrides",
 ]

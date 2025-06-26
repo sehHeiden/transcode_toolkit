@@ -1,6 +1,10 @@
+import sys
 from pathlib import Path
 
-from src.transcode_toolkit.video import transcode as vt
+# Add src to Python path so imports work
+sys.path.insert(0, "src")
+
+from transcode_toolkit.video import transcode as vt
 
 
 def test_should_skip_detection() -> None:

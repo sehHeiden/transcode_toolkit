@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import argparse
 
-    from transcode_toolkit.core import ConfigManager
+    from ...core import ConfigManager
 
 LOG = logging.getLogger(__name__)
 
@@ -18,6 +18,7 @@ class VideoCommands:
     """Video processing command handlers."""
 
     def __init__(self, config_manager: ConfigManager) -> None:
+        """Initialize video commands handler."""
         self.config_manager = config_manager
 
     def add_subcommands(self, parser: argparse.ArgumentParser) -> None:
@@ -52,41 +53,41 @@ class VideoCommands:
             return self._handle_transcode(args)
         if args.video_command == "estimate":
             return self._handle_estimate(args)
-        LOG.error(f"Unknown video command: {args.video_command}")
+        LOG.error("Unknown video command: %s", args.video_command)
         return 1
 
     def _handle_transcode(self, args: argparse.Namespace) -> int:
         """Handle video transcoding."""
         try:
-            from transcode_toolkit.processors import VideoProcessor
+            from ...processors import VideoProcessor
 
-            processor = VideoProcessor()
+            processor = VideoProcessor(self.config_manager)
 
             if args.path.is_file():
                 result = processor.process_file(args.path, crf=args.crf, gpu=args.gpu)
                 if result.status.value == "success":
-                    LOG.info(f"Successfully processed {args.path}")
+                    LOG.info("Successfully processed %s", args.path)
                     return 0
-                LOG.error(f"Failed to process {args.path}: {result.message}")
+                LOG.error("Failed to process %s: %s", args.path, result.message)
                 return 1
             results = processor.process_directory(args.path, recursive=args.recursive, crf=args.crf, gpu=args.gpu)
             successful = [r for r in results if r.status.value == "success"]
-            LOG.info(f"Processed {len(successful)}/{len(results)} files successfully")
+            LOG.info("Processed %d/%d files successfully", len(successful), len(results))
             return 0 if len(successful) == len(results) else 1
 
-        except Exception as e:
-            LOG.exception(f"Video transcoding failed: {e}")
+        except Exception:
+            LOG.exception("Video transcoding failed")
             return 1
 
     def _handle_estimate(self, args: argparse.Namespace) -> int:
         """Handle video size estimation."""
         try:
-            from transcode_toolkit.video import estimate
+            from ...video import estimate
 
             rows = estimate.analyse(args.path)
             estimate.print_summary(rows, csv_path=args.csv)
             return 0
 
-        except Exception as e:
-            LOG.exception(f"Video estimation failed: {e}")
+        except Exception:
+            LOG.exception("Video estimation failed")
             return 1

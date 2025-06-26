@@ -10,6 +10,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from ..config.constants import MIN_FILES_FOR_DUPLICATE_DETECTION
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -174,7 +176,7 @@ class DuplicateFinder:
         all_files = self._collect_files(paths, extensions)
         LOG.info(f"Found {len(all_files)} files to analyze")
 
-        if len(all_files) < 2:
+        if len(all_files) < MIN_FILES_FOR_DUPLICATE_DETECTION:
             LOG.info("Not enough files to find duplicates")
             return {}
 

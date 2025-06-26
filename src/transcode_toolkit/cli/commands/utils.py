@@ -9,7 +9,9 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import argparse
 
-    from transcode_toolkit.core import ConfigManager
+    from ...core import ConfigManager
+
+from ...config.constants import MAX_DISPLAYED_GROUPS
 
 LOG = logging.getLogger(__name__)
 
@@ -18,6 +20,7 @@ class UtilityCommands:
     """Utility command handlers."""
 
     def __init__(self, config_manager: ConfigManager) -> None:
+        """Initialize utility commands handler."""
         self.config_manager = config_manager
 
     def add_subcommands(self, parser: argparse.ArgumentParser) -> None:
@@ -55,7 +58,7 @@ class UtilityCommands:
             return self._handle_info(args)
         if args.util_command == "duplicates":
             return self._handle_duplicates(args)
-        LOG.error(f"Unknown utility command: {args.util_command}")
+        LOG.error("Unknown utility command: %s", args.util_command)
         return 1
 
     def _handle_cleanup(self, args: argparse.Namespace) -> int:
@@ -70,25 +73,25 @@ class UtilityCommands:
             backup_files = list(args.path.rglob("*.bak"))
 
             if args.dry_run:
-                LOG.info(f"Would remove {len(backup_files)} backup files")
+                LOG.info("Would remove %d backup files", len(backup_files))
                 for backup_file in backup_files:
-                    LOG.info(f"  {backup_file}")
+                    LOG.info("  %s", backup_file)
             else:
                 cleaned_count = 0
                 for backup_file in backup_files:
                     try:
                         backup_file.unlink()
                         cleaned_count += 1
-                        LOG.debug(f"Removed backup: {backup_file}")
+                        LOG.debug("Removed backup: %s", backup_file)
                     except Exception as e:
-                        LOG.warning(f"Failed to remove backup {backup_file}: {e}")
+                        LOG.warning("Failed to remove backup %s: %s", backup_file, e)
 
-                LOG.info(f"Removed {cleaned_count} backup files")
+                LOG.info("Removed %d backup files", cleaned_count)
 
             return 0
 
-        except Exception as e:
-            LOG.exception(f"Backup cleanup failed: {e}")
+        except Exception:
+            LOG.exception("Backup cleanup failed")
             return 1
 
     def _handle_info(self, args: argparse.Namespace) -> int:
@@ -97,40 +100,23 @@ class UtilityCommands:
             import shutil
             from pathlib import Path
 
-            print("=== Media Toolkit Configuration ===")
-
-            config = self.config_manager.config
-
-            print(f"Audio presets: {list(config.audio.presets.keys())}")
-            print(f"Video presets: {list(config.video.presets.keys())}")
-            print("Global settings:")
-            print(f"  Workers: {config.global_.default_workers or 'auto'}")
-            print(f"  Log level: {config.global_.log_level}")
-            print(f"  Create backups: {config.global_.create_backups}")
-            print(f"  Cleanup backups: {config.global_.cleanup_backups}")
-
-            print("\n=== System Information ===")
-
             # Check for required executables
             executables = ["ffmpeg", "ffprobe"]
             for exe in executables:
                 path = shutil.which(exe)
-                status = "✓ Found" if path else "✗ Missing"
-                print(f"{exe}: {status}")
                 if path:
-                    print(f"  Path: {path}")
+                    pass
 
             # Check config file
             config_path = Path(__file__).parent.parent.parent / "config.yaml"
-            config_status = "✓ Found" if config_path.exists() else "✗ Missing"
-            print(f"Config file: {config_status}")
+            "✓ Found" if config_path.exists() else "✗ Missing"
             if config_path.exists():
-                print(f"  Path: {config_path}")
+                pass
 
             return 0
 
-        except Exception as e:
-            LOG.exception(f"Info display failed: {e}")
+        except Exception:
+            LOG.exception("Info display failed")
             return 1
 
     def _handle_duplicates(self, args: argparse.Namespace) -> int:
@@ -139,24 +125,24 @@ class UtilityCommands:
             import json
             import time
 
-            from transcode_toolkit.core import DuplicateFinder
+            from ...core import DuplicateFinder
 
             # Validate input paths
             for path in args.paths:
                 if not path.exists():
-                    LOG.error(f"Path does not exist: {path}")
+                    LOG.error("Path does not exist: %s", path)
                     return 1
 
             # Prepare extensions set
             extensions = None
             if args.extensions:
                 extensions = {ext if ext.startswith(".") else f".{ext}" for ext in args.extensions}
-                LOG.info(f"Filtering by extensions: {extensions}")
+                LOG.info("Filtering by extensions: %s", extensions)
 
             # Initialize duplicate finder
             max_workers = args.workers
             if max_workers:
-                LOG.info(f"Using {max_workers} parallel workers")
+                LOG.info("Using %d parallel workers", max_workers)
 
             finder = DuplicateFinder(max_workers=max_workers)
 
@@ -168,12 +154,10 @@ class UtilityCommands:
                 def __call__(self, message: str) -> None:
                     current_time = time.time()
                     if current_time - self.last_update_time > 1.0:  # Update every second
-                        print(f"Progress: {message}")
                         self.last_update_time = current_time
 
             progress_callback = ProgressCallback()
 
-            print("Starting duplicate file search...")
             start_time = time.time()
 
             # Find duplicates
@@ -187,37 +171,29 @@ class UtilityCommands:
             summary = finder.get_duplicate_summary(duplicates)
 
             # Display results
-            print("\n=== Duplicate Detection Complete ===")
-            print(f"Search completed in {elapsed_time:.1f} seconds")
-            print(f"Found {summary['total_groups']} duplicate groups containing {summary['total_files']} files")
 
             if summary["wasted_space"] > 0:
                 wasted_mb = summary["wasted_space"] / (1024 * 1024)
                 wasted_gb = wasted_mb / 1024
                 if wasted_gb > 1:
-                    print(f"Estimated wasted space: {wasted_gb:.2f} GB")
+                    pass
                 else:
-                    print(f"Estimated wasted space: {wasted_mb:.1f} MB")
+                    pass
 
             if not duplicates:
-                print("No duplicate files found.")
                 return 0
 
             # Output detailed results
             if not args.summary_only:
-                print("\n=== Duplicate Groups ===")
-                for i, group in enumerate(summary["groups"][:10], 1):  # Show top 10 groups
-                    size_mb = group["size_each"] / (1024 * 1024)
+                for _i, group in enumerate(summary["groups"][:MAX_DISPLAYED_GROUPS], 1):  # Show top groups
+                    group["size_each"] / (1024 * 1024)
                     wasted_mb = group["wasted_space"] / (1024 * 1024)
 
-                    print(f"\nGroup {i}: {group['count']} files ({size_mb:.1f} MB each, {wasted_mb:.1f} MB wasted)")
-                    print(f"Hash: {group['hash']}")
-                    for file_path in group["files"]:
-                        print(f"  {file_path}")
+                    for _file_path in group["files"]:
+                        pass
 
-                if len(summary["groups"]) > 10:
-                    print(f"\n... and {len(summary['groups']) - 10} more groups")
-                    print("Use --summary-only to show only statistics")
+                if len(summary["groups"]) > MAX_DISPLAYED_GROUPS:
+                    pass
 
             # Save to file if requested
             if args.output:
@@ -236,16 +212,13 @@ class UtilityCommands:
                     with args.output.open("w", encoding="utf-8") as f:
                         json.dump(output_data, f, indent=2, ensure_ascii=False)
 
-                    print(f"\nDetailed results saved to: {args.output}")
-
                 except Exception as e:
-                    LOG.warning(f"Failed to save results to file: {e}")
+                    LOG.warning("Failed to save results to file: %s", e)
 
             return 0
 
         except KeyboardInterrupt:
-            print("\nDuplicate search cancelled by user")
             return 130
-        except Exception as e:
-            LOG.exception(f"Duplicate detection failed: {e}")
+        except Exception:
+            LOG.exception("Duplicate detection failed")
             return 1
