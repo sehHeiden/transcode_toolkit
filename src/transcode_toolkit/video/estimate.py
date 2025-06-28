@@ -292,96 +292,29 @@ def _estimate_size_by_sampling(
 def _estimate_size_by_codec(
     video_info: dict[str, Any],
     quality_decision: QualityDecision,
-    target_codec: str,  # The codec we're encoding TO
+    target_codec: str,
 ) -> int:
     """
-    Estimate HEVC file size based on content analysis and optimal CRF.
-
-    Args:
-        video_info: Video metadata from FFprobe
-        quality_decision: Optimal encoding parameters
-        compression_efficiency: Expected compression ratio vs original
-
-    Returns:
-        Estimated file size in bytes
-
+    Simple fallback estimation for when sampling fails.
+    Much simpler than before since this is only used as fallback.
     """
     try:
         original_size = video_info["size"]
-        video_info.get("duration", 0)
-        video_info.get("height", 1080)
-        codec = video_info.get("codec", "").lower()
-
-        # Codec-specific compression efficiency based on ACTUAL target codec
-        # H.265 is typically 30-50% more efficient than H.264 at same quality
-        if target_codec.lower() in ("hevc_nvenc", "libx265", "hevc"):
-            # Encoding TO H.265/HEVC
-            if codec in ("hevc", "h265"):
-                # Already HEVC - minimal improvement expected
-                base_efficiency = 0.9  # 10% improvement at most
-            elif codec in ("h264", "avc"):
-                # H.264 to HEVC - good compression gains
-                base_efficiency = 0.6  # 40% reduction typical
-            elif codec in ("mpeg2", "mpeg4", "xvid", "divx"):
-                # Older codecs - excellent compression gains
-                base_efficiency = 0.4  # 60% reduction possible
-            else:
-                # Unknown codec - conservative estimate
-                base_efficiency = 0.7
-        elif target_codec.lower() in ("h264_nvenc", "libx264", "h264", "h264_amf", "h264_qsv"):
-            # Encoding TO H.264 (various encoders)
-            if codec in ("hevc", "h265"):
-                # HEVC to H.264 - quality regression, may increase size
-                base_efficiency = 1.3  # 30% size increase expected
-            elif codec in ("h264", "avc"):
-                # H.264 to H.264 - mainly CRF/quality changes
-                base_efficiency = 0.85  # Modest 15% reduction from better encoding
-            elif codec in ("mpeg2", "mpeg4", "xvid", "divx"):
-                # Older codecs to H.264 - good compression gains
-                base_efficiency = 0.5  # 50% reduction
-            else:
-                # Unknown codec - conservative estimate
-                base_efficiency = 0.8
+        
+        # Very simple fallback - assume modest compression
+        # This is only used when sampling fails, so be conservative
+        if "h265" in target_codec.lower() or "hevc" in target_codec.lower():
+            # H.265 generally compresses better
+            fallback_ratio = 0.7  # 30% reduction
         else:
-            # Unknown target codec - very conservative
-            base_efficiency = 0.9
-
-        efficiency = base_efficiency
-
-        # Adjust efficiency based on complexity
-        complexity_factor = 1.0
-        if hasattr(quality_decision, "predicted_ssim"):
-            # More complex content (lower SSIM target) compresses less efficiently
-            if quality_decision.predicted_ssim < 0.90:
-                complexity_factor = 1.2  # 20% larger due to complexity
-            elif quality_decision.predicted_ssim > 0.95:
-                complexity_factor = 0.8  # 20% smaller for simple content
-
-        # Adjust efficiency based on CRF (much more granular)
-        # Reference: CRF 23 = 1.0, each CRF point = ~25% size change
-        reference_crf = 23
-        crf_difference = quality_decision.effective_crf - reference_crf
-
-        # Exponential relationship: lower CRF = exponentially larger files
-        # Each CRF point represents roughly 25% size change
-        crf_factor = (1.25) ** (-crf_difference)
-
-        # Clamp factor to reasonable bounds
-        crf_factor = max(0.2, min(4.0, crf_factor))
-
-        # Calculate estimated size
-        estimated_size = int(original_size * efficiency * complexity_factor * crf_factor)
-
-        # Sanity check - never estimate larger than original for most cases
-        if codec not in ("hevc", "h265") and estimated_size > original_size * 0.95:
-            estimated_size = int(original_size * 0.85)  # At least 15% reduction
-
-        return max(estimated_size, int(original_size * 0.1))  # Never smaller than 10% of original
-
-    except Exception as e:
-        LOG.warning(f"Failed to estimate size: {e}")
-        # Fallback: conservative 30% reduction
-        return int(video_info.get("size", 0) * 0.7)
+            # H.264 or other codecs
+            fallback_ratio = 0.8  # 20% reduction
+        
+        return int(original_size * fallback_ratio)
+        
+    except Exception:
+        # Last resort fallback
+        return int(video_info.get("size", 0) * 0.8)
 
 
 def analyze_single_file(file_path: Path, preset_name: str = "default") -> tuple[Path, int, int, QualityDecision] | None:
