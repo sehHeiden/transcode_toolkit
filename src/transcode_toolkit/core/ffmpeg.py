@@ -239,6 +239,119 @@ class FFmpegProcessor:
 
     def __init__(self, timeout: int = 300) -> None:
         self.timeout = timeout
+        self._available_encoders: dict[str, bool] | None = None
+
+    def get_available_encoders(self) -> dict[str, bool]:
+        """Get list of available encoders from FFmpeg."""
+        if self._available_encoders is not None:
+            return self._available_encoders
+
+        try:
+            result = subprocess.run(
+                ["ffmpeg", "-encoders"],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=10,
+                encoding="utf-8",
+                errors="replace",
+            )
+
+            encoders = {}
+            for line in result.stdout.split("\n"):
+                # Look for encoder lines (they start with " V" for video or " A" for audio)
+                if line.startswith((" V", " A")):  # Video or Audio encoder
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        encoder_name = parts[1]
+                        encoders[encoder_name] = True
+
+            self._available_encoders = encoders
+            LOG.debug(f"Found {len(encoders)} available encoders")
+            return encoders
+
+        except Exception as e:
+            LOG.warning(f"Failed to get encoder list: {e}")
+            # Fallback: assume common encoders are available
+            self._available_encoders = {
+                "libx264": True,
+                "libx265": True,
+                "libopus": True,
+                "h264_nvenc": False,
+                "hevc_nvenc": False,
+                "h264_amf": False,
+                "hevc_amf": False,
+                "h264_qsv": False,
+                "hevc_qsv": False,
+            }
+            return self._available_encoders
+
+    def is_encoder_available(self, encoder: str) -> bool:
+        """Check if a specific encoder is available."""
+        return self.get_available_encoders().get(encoder, False)
+
+    def validate_codec(self, codec: str) -> tuple[bool, str]:
+        """Validate if codec is available and return appropriate error message."""
+        if not self.is_encoder_available(codec):
+            return False, f"Encoder '{codec}' not available in your FFmpeg build"
+
+        # For GPU encoders, test if hardware is actually available
+        if codec in ["h264_nvenc", "hevc_nvenc", "h264_amf", "hevc_amf", "h264_qsv", "hevc_qsv"]:
+            return self._test_gpu_encoder(codec)
+
+        return True, ""
+
+    def _test_gpu_encoder(self, codec: str) -> tuple[bool, str]:
+        """Test if GPU encoder actually works by doing a quick encode test."""
+        try:
+            # Create a minimal test command
+            test_cmd = [
+                "ffmpeg",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=duration=1:size=320x240:rate=1",
+                "-c:v",
+                codec,
+                "-t",
+                "1",
+                "-f",
+                "null",
+                "-",
+            ]
+
+            result = subprocess.run(
+                test_cmd,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+
+            if result.returncode == 0:
+                return True, ""
+            # Parse error message for specific hardware issues
+            result.stderr.lower()
+            if codec in ["h264_nvenc", "hevc_nvenc"]:
+                return False, "NVIDIA GPU encoder not available (no compatible GPU or drivers)"
+            if codec in ["h264_amf", "hevc_amf"]:
+                return False, "AMD GPU encoder not available (no compatible GPU or drivers)"
+            if codec in ["h264_qsv", "hevc_qsv"]:
+                return False, "Intel QuickSync encoder not available (no compatible GPU or drivers)"
+            return False, f"GPU encoder '{codec}' failed hardware test"
+
+        except Exception as e:
+            LOG.debug(f"GPU encoder test failed for {codec}: {e}")
+            if codec in ["h264_nvenc", "hevc_nvenc"]:
+                return False, "NVIDIA GPU encoder not available (no compatible GPU or drivers)"
+            if codec in ["h264_amf", "hevc_amf"]:
+                return False, "AMD GPU encoder not available (no compatible GPU or drivers)"
+            if codec in ["h264_qsv", "hevc_qsv"]:
+                return False, "Intel QuickSync encoder not available (no compatible GPU or drivers)"
+            return False, f"GPU encoder '{codec}' test failed: {e}"
 
     def run_command(
         self,
@@ -249,7 +362,7 @@ class FFmpegProcessor:
         """Run FFmpeg command with proper error handling."""
         FFmpegProbe.check_availability()
 
-        LOG.debug(f"Running FFmpeg command: {' '.join(command)}")
+        LOG.info(f"Running FFmpeg command: {' '.join(command)}")
         start_time = time.time()
 
         try:
@@ -341,6 +454,7 @@ class FFmpegProcessor:
         codec: str = "libx265",
         crf: int = 24,
         preset: str = "medium",
+        preset_config=None,  # VideoPreset configuration object
         **kwargs,
     ) -> list[str]:
         """Build FFmpeg command for video transcoding."""
@@ -355,9 +469,65 @@ class FFmpegProcessor:
             "0:a?",
         ]
 
+        # Check if GPU encoding should be used - either explicitly requested or codec is GPU-based
+        is_gpu_codec = codec in ["h264_nvenc", "hevc_nvenc", "h264_amf", "hevc_amf", "h264_qsv", "hevc_qsv"]
+        use_gpu = kwargs.get("gpu") or is_gpu_codec
+
         # Video encoding parameters
-        if kwargs.get("gpu"):
-            cmd.extend(["-c:v", "hevc_nvenc", "-preset", "p5", "-cq", str(crf)])
+        if use_gpu:
+            # Use the actual codec parameter, not hardcoded hevc_nvenc
+            gpu_codec = codec if is_gpu_codec else "hevc_nvenc"
+
+            # Map both CPU presets and custom preset names to GPU presets
+            gpu_preset_map = {
+                # Standard CPU presets
+                "ultrafast": "p1",
+                "superfast": "p1",
+                "veryfast": "p2",
+                "faster": "p3",
+                "fast": "p4",
+                "medium": "p5",
+                "slow": "p6",
+                "slower": "p7",
+                "veryslow": "p7",
+                # Custom preset names that might be passed
+                "gpu": "p5",
+                "gpu_fast": "p4",
+                "gpu_hq": "p6",
+                "gpu_vfast": "p2",
+                "gpu_h265": "p5",
+                "gpu_h265_hq": "p6",
+                "gpu_h265_f": "p4",
+                "default": "p5",
+                "hq": "p6",
+                "ultra": "p7",
+                "vfast": "p2",
+                "h265": "p5",
+                "h265_hq": "p6",
+                "h265_ultra": "p7",
+                "h265_fast": "p4",
+                "archive": "p7",
+                "stream": "p4",
+                "mobile": "p4",
+            }
+            gpu_preset = gpu_preset_map.get(preset, "p5")
+
+            # NVIDIA NVENC codecs need special rate control parameters
+            if "nvenc" in gpu_codec:
+                # Use config params if available, otherwise use sensible defaults
+                rate_control = getattr(preset_config, "rate_control", None) or "constqp"
+                quality_param = getattr(preset_config, "quality_param", None) or "qp"
+
+                cmd.extend(
+                    ["-c:v", gpu_codec, "-preset", gpu_preset, "-rc", rate_control, f"-{quality_param}", str(crf)]
+                )
+            elif "amf" in gpu_codec:
+                cmd.extend(["-c:v", gpu_codec, "-preset", gpu_preset, "-qp", str(crf)])
+            elif "qsv" in gpu_codec:
+                cmd.extend(["-c:v", gpu_codec, "-preset", gpu_preset, "-global_quality", str(crf)])
+            else:
+                # Fallback for unknown GPU codecs
+                cmd.extend(["-c:v", gpu_codec, "-preset", gpu_preset, "-crf", str(crf)])
         else:
             cmd.extend(["-c:v", codec, "-preset", preset])
             if codec == "libx265":

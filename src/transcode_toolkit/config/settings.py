@@ -48,6 +48,8 @@ class VideoPreset:
     codec: str
     preset: str
     description: str = ""
+    rate_control: str | None = None  # GPU rate control mode (e.g., "constqp" for NVENC)
+    quality_param: str | None = None  # Quality parameter type ("crf", "qp", "global_quality")
 
 
 @dataclass
@@ -67,12 +69,15 @@ class AudioConfig:
         ]
     )
     presets: dict[str, AudioPreset] = field(default_factory=dict)
+    quality_thresholds: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class VideoConfig:
     """Video processing configuration."""
 
+    min_savings_percent: float = 10.0
+    size_keep_ratio: float = 0.95
     extensions: list[str] = field(
         default_factory=lambda: [
             ".mp4",
@@ -130,6 +135,14 @@ class MediaToolkitConfig:
             raise ValueError(msg)
         return self.audio.presets[preset_name]
 
+    def get_video_preset(self, preset_name: str) -> VideoPreset:
+        """Get a video preset by name."""
+        if preset_name not in self.video.presets:
+            available = ", ".join(self.video.presets.keys())
+            msg = f"Unknown video preset '{preset_name}'. Available: {available}"
+            raise ValueError(msg)
+        return self.video.presets[preset_name]
+
     @classmethod
     def _from_dict(cls, data: dict[str, Any]) -> MediaToolkitConfig:
         """Create config from dictionary."""
@@ -157,6 +170,7 @@ class MediaToolkitConfig:
             size_keep_ratio=audio_data.get("size_keep_ratio", 0.95),
             extensions=audio_data.get("extensions", [".flac", ".mp3", ".wav", ".aac", ".m4a", ".ogg", ".wma"]),
             presets=audio_presets,
+            quality_thresholds=audio_data.get("quality_thresholds", {}),
         )
 
         # Parse video config
@@ -175,6 +189,8 @@ class MediaToolkitConfig:
                         codec=preset_data["codec"],
                         preset=preset_data["preset"],
                         description=preset_data.get("description", ""),
+                        rate_control=preset_data.get("rate_control"),
+                        quality_param=preset_data.get("quality_param"),
                     )
                 else:
                     LOG.warning(f"Incomplete video preset data for '{name}': missing required fields")
@@ -182,6 +198,8 @@ class MediaToolkitConfig:
                 LOG.warning(f"Failed to load video preset '{name}': {e}")
 
         video_config = VideoConfig(
+            min_savings_percent=video_data.get("min_savings_percent", 10.0),
+            size_keep_ratio=video_data.get("size_keep_ratio", 0.95),
             extensions=video_data.get(
                 "extensions",
                 [".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v"],

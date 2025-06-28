@@ -135,7 +135,8 @@ class VideoProcessor(MediaProcessor):
     def __init__(self, config_manager: ConfigManager) -> None:
         super().__init__("VideoProcessor")
         self.config_manager = config_manager
-        self.ffmpeg = FFmpegProcessor()
+        # Use much longer timeout for video processing (30 minutes default)
+        self.ffmpeg = FFmpegProcessor(timeout=1800)
 
         # Initialize file manager with backup strategy from config
         backup_strategy_str = config_manager.get_value("global_.cleanup_backups", "on_success")
@@ -159,7 +160,7 @@ class VideoProcessor(MediaProcessor):
             # Get target codec from preset to check if already using it
             default_preset = self.config_manager.config.get_video_preset("default")
             target_codec = default_preset.codec.lower()
-            
+
             # Check if already using target codec - simple comparison
             if codec == target_codec:
                 if bitrate:
@@ -219,11 +220,13 @@ class VideoProcessor(MediaProcessor):
             # Create temporary output file
             temp_file = file_path.with_suffix(".tmp.mp4")
 
-            # Determine effective encoding parameters using SSIM-based analysis
-            folder_quality = kwargs.get("folder_quality")
-            quality_decision = self._calculate_effective_parameters(
-                file_path, video_info, preset_config, folder_quality
-            )
+            # Use config parameters directly for consistency with estimation
+            # Only override if explicitly forced via command line
+            force_crf = kwargs.get("force_crf")
+            force_preset = kwargs.get("force_preset")
+
+            effective_crf = force_crf if force_crf is not None else preset_config.crf
+            effective_preset = force_preset if force_preset is not None else preset_config.preset
 
             # Build and run FFmpeg command
             gpu = kwargs.get("gpu", False)
@@ -231,13 +234,28 @@ class VideoProcessor(MediaProcessor):
                 input_file=file_path,
                 output_file=temp_file,
                 codec=preset_config.codec,
-                crf=quality_decision.effective_crf,
-                preset=quality_decision.effective_preset,
+                crf=effective_crf,
+                preset=effective_preset,
+                preset_config=preset_config,
                 gpu=gpu,
             )
 
-            # Execute transcoding
-            self.ffmpeg.run_command(command, file_path)
+            # Calculate dynamic timeout based on file duration
+            duration_minutes = video_info.get("duration", 0) / 60
+            # Allow 3x realtime for GPU, 5x for CPU encoding, minimum 10 minutes
+            timeout_factor = 3 if gpu else 5
+            dynamic_timeout = max(600, int(duration_minutes * 60 * timeout_factor))
+
+            # Use dynamic timeout for this specific command
+            original_timeout = self.ffmpeg.timeout
+            self.ffmpeg.timeout = dynamic_timeout
+
+            try:
+                # Execute transcoding
+                self.ffmpeg.run_command(command, file_path)
+            finally:
+                # Restore original timeout
+                self.ffmpeg.timeout = original_timeout
             processing_time = time.time() - start_time
 
             # Check output file
@@ -246,19 +264,59 @@ class VideoProcessor(MediaProcessor):
                 raise ProcessingError(msg)
 
             new_size = temp_file.stat().st_size
-            size_ratio = self.config_manager.get_value("video.size_keep_ratio", 0.95)
+            self.config_manager.get_value("video.size_keep_ratio", 0.95)
 
-            # Decide whether to keep the transcoded file
-            size_improvement = new_size < (size_ratio * original_size)
+            # Calculate actual savings percentage (positive = savings, negative = increase)
+            savings_percent = ((original_size - new_size) / original_size * 100) if original_size > 0 else 0
+            min_savings_percent = self.config_manager.get_value("video.min_savings_percent", 10.0)
 
-            # Always convert if source is not target codec, even with minimal size improvement
+            # Log the actual result for debugging
+            if savings_percent < 0:
+                self.logger.warning(
+                    f"File {file_path.name} INCREASED by {abs(savings_percent):.1f}% ({original_size:,} → {new_size:,} bytes)"
+                )
+            else:
+                self.logger.info(
+                    f"File {file_path.name} savings: {savings_percent:.1f}% ({original_size:,} → {new_size:,} bytes)"
+                )
+
+            # Check for minimum savings requirement (must be positive and >= threshold)
+            meets_savings_requirement = savings_percent >= min_savings_percent
+
+            # Always convert if source is not target codec
             source_codec = video_info.get("codec", "").lower()
             target_preset = self.config_manager.config.get_video_preset(preset)
             target_codec = target_preset.codec.lower()
             is_non_target_codec = source_codec != target_codec
 
-            if size_improvement or is_non_target_codec:
-                # Replace original with transcoded version
+            # CRITICAL: Check if file size actually increased (negative savings)
+            if savings_percent < 0:
+                # File got bigger - always restore backup regardless of codec
+                self.logger.error(
+                    f"File {file_path.name} increased in size by {abs(savings_percent):.1f}% - this should never happen!"
+                )
+                temp_file.unlink()  # Remove the bad transcoded file
+
+                return ProcessingResult(
+                    source_file=file_path,
+                    status=ProcessingStatus.SKIPPED,
+                    message=f"File size increased by {abs(savings_percent):.1f}% - transcoding failed",
+                    original_size=original_size,
+                    new_size=new_size,
+                    processing_time=processing_time,
+                    metadata={
+                        "preset": preset,
+                        "crf": effective_crf,
+                        "size_reduction_mb": (original_size - new_size) / (1024 * 1024),
+                        "size_improvement": savings_percent,
+                        "reason": "file_size_increased",
+                        "error": "transcoding_made_file_bigger",
+                    },
+                )
+
+            # Check safeguards BEFORE replacing the original file
+            if meets_savings_requirement or is_non_target_codec:
+                # Savings requirement met or codec conversion - proceed with replacement
                 create_backups = self.config_manager.get_value("global_.create_backups", True)
                 operation = self.file_manager.atomic_replace(
                     source_path=file_path,
@@ -266,40 +324,49 @@ class VideoProcessor(MediaProcessor):
                     create_backup=create_backups,
                 )
 
+                # Get final file size for metadata
+                final_size = operation.target_path.stat().st_size
+                final_savings_percent = ((original_size - final_size) / original_size * 100) if original_size > 0 else 0
+
                 return ProcessingResult(
                     source_file=file_path,
                     status=ProcessingStatus.SUCCESS,
-                    message=f"Transcoded with {preset} preset (CRF {quality_decision.effective_crf})",
+                    message=f"Transcoded with {preset} preset (CRF {effective_crf}, {final_savings_percent:.1f}% savings)",
                     output_file=operation.target_path,
                     original_size=original_size,
-                    new_size=new_size,
+                    new_size=final_size,
                     processing_time=processing_time,
                     metadata={
                         "preset": preset,
                         "codec": preset_config.codec,
-                        "crf": quality_decision.effective_crf,
-                        "predicted_ssim": quality_decision.predicted_ssim,
-                        "size_reduction_mb": (original_size - new_size) / (1024 * 1024),
+                        "crf": effective_crf,
+                        "size_reduction_mb": (original_size - final_size) / (1024 * 1024),
                         "backup_created": operation.backup_path is not None,
-                        "limitation_reason": quality_decision.limitation_reason,
+                        "savings_percent": final_savings_percent,
                     },
                 )
 
-            # Remove temporary file - no significant improvement
+            # SAFEGUARD: Insufficient savings - don't replace original file
+            # Remove the transcoded temp file since we're not using it
             temp_file.unlink()
+
+            skip_reason = f"Insufficient savings ({savings_percent:.1f}% < {min_savings_percent}% threshold)"
+            self.logger.warning(f"File {file_path.name}: {skip_reason}")
 
             return ProcessingResult(
                 source_file=file_path,
                 status=ProcessingStatus.SKIPPED,
-                message="No significant size reduction achieved",
+                message=skip_reason,
                 original_size=original_size,
                 new_size=new_size,
                 processing_time=processing_time,
                 metadata={
                     "preset": preset,
-                    "crf": quality_decision.effective_crf,
+                    "crf": effective_crf,
                     "size_reduction_mb": (original_size - new_size) / (1024 * 1024),
-                    "size_improvement": (original_size - new_size) / original_size * 100,
+                    "size_improvement": savings_percent,
+                    "meets_savings_requirement": False,
+                    "reason": "insufficient_savings",
                 },
             )
 
@@ -327,25 +394,43 @@ class VideoProcessor(MediaProcessor):
         video_info: dict[str, Any],
         preset_config: Any,
         folder_quality: float | None = None,
+        force_crf: int | None = None,
+        force_preset: str | None = None,
     ):
-        """Calculate effective encoding parameters using SSIM-based analysis."""
+        """Calculate effective encoding parameters using the same logic as estimation module."""
         try:
             from ..core.video_analysis import analyze_file, calculate_optimal_crf
+            from ..video.estimate import _predict_ssim_for_crf
 
-            # Analyze video content
+            # Analyze video content (reuse estimation logic)
             analysis = analyze_file(file_path, use_cache=True)
             complexity = analysis["complexity"]
 
             # Calculate optimal CRF based on content and target quality
             target_ssim = folder_quality or analysis["estimated_ssim_threshold"]
 
+            # Use the same CRF calculation as estimation
+            # Only force CRF if explicitly requested, otherwise let algorithm decide
             quality_decision = calculate_optimal_crf(
                 file_path=file_path,
                 video_info=video_info,
                 complexity=complexity,
                 target_ssim=target_ssim,
                 folder_quality=folder_quality,
+                force_preset=force_preset,  # Use forced preset if provided
+                force_crf=force_crf,  # Only use if explicitly forced, not preset default
             )
+
+            # Calculate predicted SSIM using the same function as estimation
+            predicted_ssim = _predict_ssim_for_crf(
+                crf=quality_decision.effective_crf,
+                complexity=complexity.overall_complexity,
+                height=video_info.get("height", 1080),
+                baseline_ssim=target_ssim,
+            )
+
+            # Update quality decision with predicted SSIM for consistency
+            quality_decision.predicted_ssim = predicted_ssim
 
             self.logger.debug(
                 f"Calculated optimal parameters for {file_path.name}: "
@@ -477,6 +562,17 @@ class VideoProcessor(MediaProcessor):
 
         finally:
             progress_bar.close()
+
+            # Always clean up session backups based on configured strategy
+            self.file_manager.cleanup_session_backups()
+
+            # Log session summary
+            summary = self.file_manager.get_session_summary()
+            self.logger.info(
+                f"Session complete: {summary['successful_operations']} successful, "
+                f"{summary['failed_operations']} failed, "
+                f"{summary['backups_created']} backups created"
+            )
 
         # Summary
         successful = [r for r in results if r.status == ProcessingStatus.SUCCESS]

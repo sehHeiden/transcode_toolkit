@@ -136,11 +136,13 @@ def estimate_complexity(file_path: Path, video_info: dict[str, Any]) -> VideoCom
             # Motion analysis (compare with previous frame if available)
             motion_score = 0.5  # Default for first frame
             if i > 0 and frames[i - 1] is not None:
-                prev_gray = (
-                    cv2.cvtColor(frames[i - 1], cv2.COLOR_BGR2GRAY) if len(frames[i - 1].shape) == 3 else frames[i - 1]
-                )
-                diff = cv2.absdiff(gray, prev_gray)
-                motion_score = min(1.0, float(np.mean(diff)) / 255.0 * 5.0)  # Scale up motion sensitivity
+                prev_frame = frames[i - 1]
+                if prev_frame is not None:  # Additional check for mypy
+                    prev_gray = (
+                        cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY) if len(prev_frame.shape) == 3 else prev_frame
+                    )
+                    diff = cv2.absdiff(gray, prev_gray)
+                    motion_score = min(1.0, float(np.mean(diff)) / 255.0 * 5.0)  # Scale up motion sensitivity
 
             detail_scores.append(detail_score)
             grain_scores.append(grain_score)
@@ -295,11 +297,18 @@ def calculate_optimal_crf(
     complexity: VideoComplexity,
     target_ssim: float = 0.92,
     folder_quality: float | None = None,
+    force_preset: str | None = None,
+    force_crf: int | None = None,
 ) -> QualityDecision:
     """
     Calculate optimal CRF value based on content analysis and target SSIM.
 
     Uses lookup tables and content analysis for fast parameter selection.
+
+    Args:
+        force_preset: Override automatic preset selection
+        force_crf: Override automatic CRF calculation
+
     """
     try:
         # Use folder quality if provided, otherwise calculate from file
@@ -308,47 +317,141 @@ def calculate_optimal_crf(
         else:
             effective_target = estimate_ssim_threshold(file_path, video_info, complexity)
 
-        # CRF lookup table based on complexity and target SSIM
-        # Format: (complexity_range, resolution_category): (ssim_0.85, ssim_0.90, ssim_0.92, ssim_0.95)
+        # Check if source is already heavily compressed
+        source_bitrate = video_info.get("bitrate", 0) or 0
+        source_bitrate = int(source_bitrate) if source_bitrate else 0
+
+        # Define expected bitrates by resolution for well-compressed content
         height = video_info.get("height", 1080)
+        expected_bitrates = {
+            480: 1_500_000,  # 1.5 Mbps
+            720: 3_000_000,  # 3 Mbps
+            1080: 6_000_000,  # 6 Mbps
+            1440: 12_000_000,  # 12 Mbps
+            2160: 25_000_000,  # 25 Mbps
+        }
 
-        if height >= 2160:  # 4K
-            crf_lookup = {
-                (0.0, 0.3): (28, 24, 22, 18),  # Simple content
-                (0.3, 0.6): (26, 22, 20, 16),  # Medium content
-                (0.6, 1.0): (24, 20, 18, 14),  # Complex content
-            }
-            preset = "slow"  # 4K benefits from slower preset
-        elif height >= 1440:  # 1440p
-            crf_lookup = {(0.0, 0.3): (26, 22, 20, 16), (0.3, 0.6): (24, 20, 18, 14), (0.6, 1.0): (22, 18, 16, 12)}
-            preset = "medium"
-        elif height >= 1080:  # 1080p
-            crf_lookup = {(0.0, 0.3): (25, 21, 19, 15), (0.3, 0.6): (23, 19, 17, 13), (0.6, 1.0): (21, 17, 15, 11)}
-            preset = "medium"
-        else:  # 720p and below
-            crf_lookup = {(0.0, 0.3): (24, 20, 18, 14), (0.3, 0.6): (22, 18, 16, 12), (0.6, 1.0): (20, 16, 14, 10)}
-            preset = "fast"  # Lower resolution can use faster preset
-
-        # Find appropriate CRF based on complexity
-        complexity_val = complexity.overall_complexity
-        selected_crf = 23  # Safe default
-
-        for (min_c, max_c), crfs in crf_lookup.items():
-            if min_c <= complexity_val < max_c:
-                # Select CRF based on target SSIM
-                if effective_target >= 0.95:
-                    selected_crf = crfs[3]
-                elif effective_target >= 0.92:
-                    selected_crf = crfs[2]
-                elif effective_target >= 0.90:
-                    selected_crf = crfs[1]
-                else:
-                    selected_crf = crfs[0]
+        # Find expected bitrate for this resolution
+        expected_bitrate = 25_000_000  # Default for very high res
+        for res, bitrate in sorted(expected_bitrates.items()):
+            if height <= res:
+                expected_bitrate = bitrate
                 break
 
-        # Adjust for grain content
-        if complexity.grain_score > 0.7:
-            selected_crf = max(10, selected_crf - 2)  # Lower CRF for grainy content
+        # Adjust CRF based on source compression level
+        is_heavily_compressed = source_bitrate > 0 and source_bitrate < expected_bitrate * 0.7
+
+        # CRF lookup table based on complexity and target SSIM
+        # Preset configs now handle GPU-specific CRF values
+        crf_adjustment = 0
+
+        if height >= 2160:  # 4K
+            if is_heavily_compressed:
+                crf_lookup = {
+                    (0.0, 0.3): (32 + crf_adjustment, 28 + crf_adjustment, 26 + crf_adjustment, 22 + crf_adjustment),
+                    (0.3, 0.6): (30 + crf_adjustment, 26 + crf_adjustment, 24 + crf_adjustment, 20 + crf_adjustment),
+                    (0.6, 1.0): (28 + crf_adjustment, 24 + crf_adjustment, 22 + crf_adjustment, 18 + crf_adjustment),
+                }
+            else:
+                crf_lookup = {
+                    (0.0, 0.3): (28 + crf_adjustment, 24 + crf_adjustment, 22 + crf_adjustment, 18 + crf_adjustment),
+                    (0.3, 0.6): (26 + crf_adjustment, 22 + crf_adjustment, 20 + crf_adjustment, 16 + crf_adjustment),
+                    (0.6, 1.0): (24 + crf_adjustment, 20 + crf_adjustment, 18 + crf_adjustment, 14 + crf_adjustment),
+                }
+            preset = "slow"  # 4K benefits from slower preset
+        elif height >= 1440:  # 1440p
+            if is_heavily_compressed:
+                crf_lookup = {
+                    (0.0, 0.3): (30 + crf_adjustment, 26 + crf_adjustment, 24 + crf_adjustment, 20 + crf_adjustment),
+                    (0.3, 0.6): (28 + crf_adjustment, 24 + crf_adjustment, 22 + crf_adjustment, 18 + crf_adjustment),
+                    (0.6, 1.0): (26 + crf_adjustment, 22 + crf_adjustment, 20 + crf_adjustment, 16 + crf_adjustment),
+                }
+            else:
+                crf_lookup = {
+                    (0.0, 0.3): (26 + crf_adjustment, 22 + crf_adjustment, 20 + crf_adjustment, 16 + crf_adjustment),
+                    (0.3, 0.6): (24 + crf_adjustment, 20 + crf_adjustment, 18 + crf_adjustment, 14 + crf_adjustment),
+                    (0.6, 1.0): (22 + crf_adjustment, 18 + crf_adjustment, 16 + crf_adjustment, 12 + crf_adjustment),
+                }
+            preset = "medium"
+        elif height >= 1080:  # 1080p
+            if is_heavily_compressed:
+                crf_lookup = {
+                    (0.0, 0.3): (29 + crf_adjustment, 25 + crf_adjustment, 23 + crf_adjustment, 19 + crf_adjustment),
+                    (0.3, 0.6): (27 + crf_adjustment, 23 + crf_adjustment, 21 + crf_adjustment, 17 + crf_adjustment),
+                    (0.6, 1.0): (25 + crf_adjustment, 21 + crf_adjustment, 19 + crf_adjustment, 15 + crf_adjustment),
+                }
+            else:
+                crf_lookup = {
+                    (0.0, 0.3): (25 + crf_adjustment, 21 + crf_adjustment, 19 + crf_adjustment, 15 + crf_adjustment),
+                    (0.3, 0.6): (23 + crf_adjustment, 19 + crf_adjustment, 17 + crf_adjustment, 13 + crf_adjustment),
+                    (0.6, 1.0): (21 + crf_adjustment, 17 + crf_adjustment, 15 + crf_adjustment, 11 + crf_adjustment),
+                }
+            preset = "medium"
+        else:  # 720p and below
+            if is_heavily_compressed:
+                crf_lookup = {
+                    (0.0, 0.3): (28 + crf_adjustment, 24 + crf_adjustment, 22 + crf_adjustment, 18 + crf_adjustment),
+                    (0.3, 0.6): (26 + crf_adjustment, 22 + crf_adjustment, 20 + crf_adjustment, 16 + crf_adjustment),
+                    (0.6, 1.0): (24 + crf_adjustment, 20 + crf_adjustment, 18 + crf_adjustment, 14 + crf_adjustment),
+                }
+            else:
+                crf_lookup = {
+                    (0.0, 0.3): (24 + crf_adjustment, 20 + crf_adjustment, 18 + crf_adjustment, 14 + crf_adjustment),
+                    (0.3, 0.6): (22 + crf_adjustment, 18 + crf_adjustment, 16 + crf_adjustment, 12 + crf_adjustment),
+                    (0.6, 1.0): (20 + crf_adjustment, 16 + crf_adjustment, 14 + crf_adjustment, 10 + crf_adjustment),
+                }
+            preset = "fast"  # Lower resolution can use faster preset
+
+        # Check if this is a GPU preset by looking at force_preset
+        is_gpu_preset = force_preset and any(
+            marker in force_preset.lower() for marker in ["gpu", "nvenc", "amf", "qsv"]
+        )
+
+        # Use forced CRF if provided, otherwise calculate
+        if force_crf is not None:
+            selected_crf = force_crf
+        elif is_gpu_preset:
+            # For GPU presets, be more conservative with CRF adjustments
+            # Start with a higher baseline since GPU encoders are less efficient
+            selected_crf = 28  # Conservative GPU default
+
+            # Only make small adjustments for complexity
+            complexity_val = complexity.overall_complexity
+            if complexity_val > 0.8:  # Very high complexity
+                selected_crf = max(24, selected_crf - 2)
+            elif complexity_val > 0.6:  # Medium-high complexity
+                selected_crf = max(26, selected_crf - 1)
+            elif complexity_val < 0.3:  # Low complexity
+                selected_crf = min(32, selected_crf + 2)
+
+            # Minimal adjustment for grain (GPU encoders don't handle grain as well)
+            if complexity.grain_score > 0.7:
+                selected_crf = max(22, selected_crf - 1)
+        else:
+            # Standard CPU encoder CRF calculation
+            complexity_val = complexity.overall_complexity
+            selected_crf = 23  # Safe default
+
+            for (min_c, max_c), crfs in crf_lookup.items():
+                if min_c <= complexity_val < max_c:
+                    # Select CRF based on target SSIM
+                    if effective_target >= 0.95:
+                        selected_crf = crfs[3]
+                    elif effective_target >= 0.92:
+                        selected_crf = crfs[2]
+                    elif effective_target >= 0.90:
+                        selected_crf = crfs[1]
+                    else:
+                        selected_crf = crfs[0]
+                    break
+
+            # Adjust for grain content
+            if complexity.grain_score > 0.7:
+                selected_crf = max(10, selected_crf - 2)  # Lower CRF for grainy content
+
+        # Use forced preset if provided, otherwise use calculated preset
+        if force_preset is not None:
+            preset = force_preset
 
         # Determine limitation reason
         limitation_reason = None

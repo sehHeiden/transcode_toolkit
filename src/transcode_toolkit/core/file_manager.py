@@ -101,9 +101,17 @@ class FileManager:
                 source_path.unlink()
 
             # Move temp file to final location
-            final_path = (
-                source_path.with_suffix(".opus") if source_path.suffix.lower() not in {".opus"} else source_path
-            )
+            # Keep original extension for video files, or use .opus for audio files
+            if temp_path.suffix.lower() in {".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v"}:
+                # Video file - keep original extension
+                final_path = source_path
+            elif source_path.suffix.lower() not in {".opus"}:
+                # Audio file - change to .opus
+                final_path = source_path.with_suffix(".opus")
+            else:
+                # Already correct extension
+                final_path = source_path
+
             shutil.move(temp_path, final_path)
 
             operation = FileOperation(

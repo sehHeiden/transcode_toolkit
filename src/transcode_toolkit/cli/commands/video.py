@@ -20,6 +20,36 @@ class VideoCommands:
     def __init__(self, config_manager: ConfigManager) -> None:
         """Initialize video commands handler."""
         self.config_manager = config_manager
+        self._working_presets_cache: list[str] | None = None
+
+    def _get_working_presets(self) -> list[str]:
+        """Get list of presets that work on this system (cache results)."""
+        if self._working_presets_cache is not None:
+            return self._working_presets_cache
+
+        from ...core.ffmpeg import FFmpegProcessor
+
+        ffmpeg = FFmpegProcessor()
+        all_presets = self.config_manager.config.video.presets
+        working_presets = []
+
+        for preset_name, preset_config in all_presets.items():
+            codec = preset_config.codec
+            is_available, _ = ffmpeg.validate_codec(codec)
+
+            if is_available:
+                working_presets.append(preset_name)
+            else:
+                LOG.debug(f"Filtering out preset '{preset_name}' - codec '{codec}' not available")
+
+        # Ensure 'default' is always first if available
+        if "default" in working_presets:
+            working_presets.remove("default")
+            working_presets.insert(0, "default")
+
+        self._working_presets_cache = working_presets
+        LOG.debug(f"Available presets on this system: {', '.join(working_presets)}")
+        return working_presets
 
     def add_subcommands(self, parser: argparse.ArgumentParser) -> None:
         """Add video subcommands to parser."""
@@ -28,8 +58,23 @@ class VideoCommands:
         # Transcode command
         transcode_parser = subparsers.add_parser("transcode", help="Transcode video files")
         transcode_parser.add_argument("path", type=Path, help="Path to video file or directory")
-        transcode_parser.add_argument("--crf", "-c", type=int, default=24, help="Constant Rate Factor (quality)")
-        transcode_parser.add_argument("--gpu", "-g", action="store_true", help="Use GPU acceleration")
+
+        # Filter presets to only show working ones
+        available_presets = self._get_working_presets()
+        transcode_parser.add_argument(
+            "--preset",
+            "-p",
+            choices=available_presets,
+            default="default",
+            help=f"Encoding preset: {', '.join(available_presets)}",
+        )
+
+        # Override options (optional)
+        transcode_parser.add_argument("--crf", "-c", type=int, help="Override CRF value from preset")
+        transcode_parser.add_argument(
+            "--gpu", "-g", action="store_true", help="Use GPU acceleration (overrides preset codec)"
+        )
+
         transcode_parser.add_argument(
             "--recursive",
             "-r",
@@ -59,20 +104,71 @@ class VideoCommands:
     def _handle_transcode(self, args: argparse.Namespace) -> int:
         """Handle video transcoding."""
         try:
+            from ...core.ffmpeg import FFmpegProcessor
             from ...processors import VideoProcessor
+
+            # Get preset configuration
+            preset_name = getattr(args, "preset", "default")
+            preset_config = self.config_manager.config.get_video_preset(preset_name)
+
+            # Validate codec availability
+            ffmpeg = FFmpegProcessor()
+            codec_to_check = preset_config.codec
+
+            # Override with GPU codec if --gpu flag is used
+            if getattr(args, "gpu", False):
+                codec_to_check = "hevc_nvenc"  # Default GPU codec
+
+            # Validate codec availability (this should rarely fail since we filter presets)
+            is_available, error_msg = ffmpeg.validate_codec(codec_to_check)
+            if not is_available:
+                LOG.error(f"Cannot use preset '{preset_name}': {error_msg}")
+                working_presets = self._get_working_presets()
+                LOG.info(f"Available presets on your system: {', '.join(working_presets)}")
+                return 1
 
             processor = VideoProcessor(self.config_manager)
 
+            # Prepare kwargs for processing
+            process_kwargs = {
+                "preset": preset_name,
+                "gpu": getattr(args, "gpu", False),
+            }
+
+            # Add parameter overrides if specified
+            if hasattr(args, "crf") and args.crf is not None:
+                process_kwargs["force_crf"] = args.crf
+
+            # Pass preset name for forced preset usage
+            process_kwargs["force_preset"] = preset_name
+
             if args.path.is_file():
-                result = processor.process_file(args.path, crf=args.crf, gpu=args.gpu)
+                # Extract and cast the values from process_kwargs
+                preset_val = process_kwargs.get("preset", "default")
+                gpu_val = process_kwargs.get("gpu", False)
+                force_crf_val = process_kwargs.get("force_crf")
+                force_preset_val = process_kwargs.get("force_preset")
+
+                # Ensure proper types
+                preset_str = str(preset_val) if preset_val is not None else "default"
+                gpu_bool = bool(gpu_val) if gpu_val is not None else False
+                force_crf_int = int(force_crf_val) if force_crf_val is not None else None
+                force_preset_str = str(force_preset_val) if force_preset_val is not None else None
+
+                result = processor.process_file(
+                    args.path, preset=preset_str, gpu=gpu_bool, force_crf=force_crf_int, force_preset=force_preset_str
+                )
                 if result.status.value == "success":
-                    LOG.info("Successfully processed %s", args.path)
+                    LOG.info(f"Successfully processed {args.path} with preset '{preset_name}'")
                     return 0
                 LOG.error("Failed to process %s: %s", args.path, result.message)
                 return 1
-            results = processor.process_directory(args.path, recursive=args.recursive, crf=args.crf, gpu=args.gpu)
+
+            results = processor.process_directory(
+                args.path, recursive=getattr(args, "recursive", True), **process_kwargs
+            )
             successful = [r for r in results if r.status.value == "success"]
-            LOG.info("Processed %d/%d files successfully", len(successful), len(results))
+            LOG.info(f"Processed {len(successful)}/{len(results)} files successfully with preset '{preset_name}'")
             return 0 if len(successful) == len(results) else 1
 
         except Exception:
