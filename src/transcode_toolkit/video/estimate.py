@@ -184,6 +184,111 @@ def _predict_ssim_for_crf(crf: int, complexity: float, height: int, baseline_ssi
     return max(0.50, min(0.99, predicted_ssim))
 
 
+def _estimate_size_by_sampling(
+    file_path: Path,
+    video_info: dict[str, Any],
+    quality_decision: QualityDecision,
+    target_codec: str,
+    sample_duration: int = 30,  # Sample 30 seconds by default
+) -> int:
+    """
+    Estimate file size by actually encoding a sample segment.
+    
+    This provides much more accurate estimates than theoretical calculations.
+    """
+    try:
+        from ..core.ffmpeg import FFmpegProcessor
+        import tempfile
+        import time
+        
+        duration = video_info.get("duration", 0)
+        if duration < sample_duration:
+            # For short videos, just use theoretical estimation
+            return _estimate_size_by_codec(video_info, quality_decision, target_codec)
+        
+        # Create temporary files for sample
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as sample_input:
+            sample_input_path = Path(sample_input.name)
+        
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as sample_output:
+            sample_output_path = Path(sample_output.name)
+        
+        try:
+            ffmpeg = FFmpegProcessor(timeout=300)  # 5 minute timeout for sampling
+            
+            # Extract sample from middle of video (avoid intros/credits)
+            start_time = max(60, duration * 0.3)  # Start at 30% or 1 minute, whichever is later
+            
+            # Step 1: Extract sample segment
+            extract_cmd = [
+                "ffmpeg", "-y", "-i", str(file_path),
+                "-ss", str(start_time), "-t", str(sample_duration),
+                "-c", "copy",  # Copy without re-encoding
+                str(sample_input_path)
+            ]
+            
+            LOG.debug(f"Extracting {sample_duration}s sample from {file_path.name}")
+            ffmpeg.run_command(extract_cmd, file_path)
+            
+            if not sample_input_path.exists():
+                raise Exception("Failed to extract sample segment")
+            
+            sample_input_size = sample_input_path.stat().st_size
+            
+            # Step 2: Encode sample with target settings
+            from ..config import get_config
+            config = get_config()
+            preset_config = config.get_video_preset(quality_decision.effective_preset or "default")
+            
+            encode_cmd = ffmpeg.build_video_command(
+                input_file=sample_input_path,
+                output_file=sample_output_path,
+                codec=target_codec,
+                crf=quality_decision.effective_crf,
+                preset=quality_decision.effective_preset or "medium",
+                preset_config=preset_config,
+                gpu="nvenc" in target_codec or "amf" in target_codec or "qsv" in target_codec
+            )
+            
+            LOG.debug(f"Encoding sample with {target_codec}, CRF {quality_decision.effective_crf}")
+            start_time = time.time()
+            ffmpeg.run_command(encode_cmd, sample_input_path)
+            encoding_time = time.time() - start_time
+            
+            if not sample_output_path.exists():
+                raise Exception("Failed to encode sample segment")
+            
+            sample_output_size = sample_output_path.stat().st_size
+            
+            # Calculate compression ratio from actual sample
+            compression_ratio = sample_output_size / sample_input_size if sample_input_size > 0 else 1.0
+            
+            # Estimate full file size
+            estimated_size = int(video_info["size"] * compression_ratio)
+            
+            # Add small safety margin (sampling might not be perfectly representative)
+            safety_margin = 1.1  # 10% safety margin
+            estimated_size = int(estimated_size * safety_margin)
+            
+            LOG.info(
+                f"Sample encoding: {sample_input_size:,} → {sample_output_size:,} bytes "
+                f"(ratio: {compression_ratio:.3f}) in {encoding_time:.1f}s. "
+                f"Estimated full size: {estimated_size:,} bytes"
+            )
+            
+            return estimated_size
+            
+        finally:
+            # Clean up temporary files
+            for temp_file in [sample_input_path, sample_output_path]:
+                if temp_file.exists():
+                    temp_file.unlink(missing_ok=True)
+                    
+    except Exception as e:
+        LOG.warning(f"Sampling failed for {file_path.name}: {e}. Falling back to theoretical estimation.")
+        return _estimate_size_by_codec(video_info, quality_decision, target_codec)
+
+
 def _estimate_size_by_codec(
     video_info: dict[str, Any],
     quality_decision: QualityDecision,
@@ -422,7 +527,10 @@ def analyse(root: Path) -> list[tuple[Path, int, int, dict[str, Any]]]:
                 )
 
                 # Estimate size for this preset's specific codec and CRF
-                estimated_size = _estimate_size_by_codec(video_info, preset_quality_decision, preset_config.codec)
+                # Use sampling-based estimation for more accuracy
+                estimated_size = _estimate_size_by_sampling(
+                    file_path, video_info, preset_quality_decision, preset_config.codec
+                )
 
                 LOG.debug(
                     f"Preset {preset_name} estimation for {file_path.name}: "

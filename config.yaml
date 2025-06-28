@@ -179,7 +179,7 @@ video:
     
     # === NVIDIA GPU PRESETS (H.264) ===
     gpu:
-      crf: 28  # Higher CRF for GPU encoders
+      crf: 24  # Reduced from 28 - less compression
       codec: "h264_nvenc"
       preset: "medium"
       rate_control: "constqp"
@@ -187,7 +187,7 @@ video:
       description: "GPU-accelerated H.264 encoding"
     
     gpu_hq:
-      crf: 24
+      crf: 20  # Reduced from 24 - much less compression for high quality
       codec: "h264_nvenc"
       preset: "slow"
       rate_control: "constqp"
@@ -195,7 +195,7 @@ video:
       description: "High quality GPU H.264 encoding"
     
     gpu_fast:
-      crf: 30
+      crf: 26  # Reduced from 30 - less compression
       codec: "h264_nvenc"
       preset: "fast"
       rate_control: "constqp"
@@ -203,7 +203,7 @@ video:
       description: "Fast GPU H.264 encoding"
     
     gpu_vfast:
-      crf: 32
+      crf: 28  # Reduced from 32 - less compression
       codec: "h264_nvenc"
       preset: "fast"
       rate_control: "constqp"
@@ -212,7 +212,7 @@ video:
     
     # === NVIDIA GPU PRESETS (H.265/HEVC) ===
     gpu_h265:
-      crf: 26  # Balanced CRF for GPU encoders
+      crf: 22  # Reduced from 26 - less compression
       codec: "hevc_nvenc"
       preset: "medium"
       rate_control: "constqp"
@@ -220,7 +220,7 @@ video:
       description: "GPU-accelerated H.265 encoding"
     
     gpu_h265_hq:
-      crf: 24
+      crf: 18  # Reduced from 24 - much less compression for high quality
       codec: "hevc_nvenc"
       preset: "slow"
       rate_control: "constqp"
@@ -228,7 +228,7 @@ video:
       description: "High quality GPU H.265 encoding"
     
     gpu_h265_f:
-      crf: 30
+      crf: 26  # Reduced from 30 - less compression
       codec: "hevc_nvenc"
       preset: "fast"
       rate_control: "constqp"
