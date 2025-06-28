@@ -27,106 +27,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-def get_thermal_safe_worker_count(configured_workers: int | None) -> int:
-    """
-    Get a thermally safe number of workers that doesn't overwhelm the system.
-
-    Uses psutil to monitor system load and temperature (where available),
-    ensuring we don't use too many cores that could cause thermal issues.
-
-    Args:
-        configured_workers: The configured worker count, or None for auto-detection
-
-    Returns:
-        Safe number of workers considering thermal and system constraints
-
-    """
-    logger = logging.getLogger(__name__)
-
-    if configured_workers is not None and configured_workers > 0:
-        # Still apply thermal safety checks even for manual configuration
-        safe_workers = min(configured_workers, _get_thermal_limit())
-        if safe_workers < configured_workers:
-            logger.warning(
-                f"Reducing configured workers from {configured_workers} to {safe_workers} "
-                "due to thermal/system load constraints"
-            )
-        return safe_workers
-
-    # Get actual core counts using psutil
-    try:
-        physical_cores = psutil.cpu_count(logical=False) or 1
-        logical_cores = psutil.cpu_count(logical=True) or 1
-
-        # Check current system load
-        cpu_percent = psutil.cpu_percent(interval=1.0)
-
-        # Very conservative approach for thermal safety:
-        # - Use at most half the physical cores for heavy transcoding
-        # - Leave plenty of headroom for system cooling
-        max_workers = max(1, physical_cores // 2)
-
-        # Apply additional thermal limits
-        thermal_limit = _get_thermal_limit()
-        max_workers = min(max_workers, thermal_limit)
-
-        # If system is already under high load, reduce workers further
-        if cpu_percent > 70:
-            max_workers = max(1, max_workers // 2)
-            logger.warning(f"High CPU load detected ({cpu_percent:.1f}%), reducing workers to {max_workers}")
-
-        # Cap at 4 workers to prevent thermal issues on most systems
-        max_workers = min(max_workers, 4)
-
-        logger.info(
-            f"Thermal-safe configuration: {physical_cores} physical cores, {logical_cores} logical cores, "
-            f"CPU load: {cpu_percent:.1f}%. Using {max_workers} workers for thermal safety."
-        )
-
-        return max_workers
-
-    except Exception as e:
-        # Very conservative fallback if monitoring fails
-        logger.warning(f"Failed to detect system specs with psutil: {e}. Using conservative fallback of 1 worker.")
-        return 1
-
-
-def _get_thermal_limit() -> int:
-    """
-    Determine thermal limits based on system capabilities.
-
-    Returns:
-        Maximum recommended workers considering thermal constraints
-
-    """
-    try:
-        # Try to get temperature sensors (Linux systems mostly)
-        if hasattr(psutil, "sensors_temperatures"):
-            temps = psutil.sensors_temperatures()
-            if temps:
-                max_temp = 0
-                for entries in temps.values():
-                    for entry in entries:
-                        if entry.current and entry.current > max_temp:
-                            max_temp = entry.current
-
-                # If we can read temps and they're high, be more conservative
-                if max_temp > 70:  # Above 70°C, reduce workers
-                    return 2
-                if max_temp > 60:  # Above 60°C, moderate reduction
-                    return 3
-
-        # Check available memory as another thermal/stability indicator
-        memory = psutil.virtual_memory()
-        if memory.percent > 80:  # High memory usage can indicate thermal stress
-            return 2
-
-        # Default thermal-safe limit
-        return 4
-
-    except Exception:
-        # If we can't monitor anything, be very conservative
-        return 2
 
 
 class AudioProcessor(MediaProcessor):
@@ -295,131 +195,21 @@ class AudioProcessor(MediaProcessor):
         **kwargs,
     ) -> list[ProcessingResult]:
         """Process all audio files in directory with multithreading."""
-        # Extract parameters from kwargs
-        preset = kwargs.pop("preset", "music")  # Remove from kwargs to avoid conflicts
-        max_workers = kwargs.pop("max_workers", None)  # Remove from kwargs
-
-        # Get worker count from config if not specified
-        if max_workers is None:
-            configured_workers = self.config_manager.get_value("global_.default_workers")
-            max_workers = get_thermal_safe_worker_count(configured_workers)
-        else:
-            # Even if specified, ensure it's thermally safe
-            max_workers = get_thermal_safe_worker_count(max_workers)
-
-        # Note: Backup cleanup is now handled only at session end for successful operations
-
-        # Get all compatible files with progress feedback
-        pattern = "**/*" if recursive else "*"
-        self.logger.info(f"Scanning directory: {directory} (recursive: {recursive})")
-
-        # First pass: find all audio files
-        all_files = [f for f in directory.glob(pattern) if f.is_file() and self.can_process(f)]
-        self.logger.info(f"Found {len(all_files)} audio files to analyze")
-
-        # Second pass: filter files that need processing with multicore analysis
-        files = self._analyze_files_parallel(all_files, preset, max_workers, **kwargs)
-
-        # Initialize progress bar with more details
-        # Pre-compute folder SNR once per directory so each thread can reuse it
-        from collections import defaultdict
-
         from ..core.audio_analysis import analyze_folder_snr
-
-        folder_map: dict[Path, list[Path]] = defaultdict(list)
-        for f in all_files:
-            folder_map[f.parent].append(f)
-        folder_snr_cache: dict[Path, float] = {}
-        for folder, files_in_dir in folder_map.items():
-            folder_snr_cache[folder] = analyze_folder_snr(folder, files_in_dir)
-
-        progress_bar = tqdm(
-            total=len(files),
-            desc="Processing Files",
-            unit="file",
-            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
+        from ..core.directory_processor import process_directory_unified
+        
+        # Extract preset from kwargs
+        preset = kwargs.pop("preset", "music")
+        
+        return process_directory_unified(
+            processor=self,
+            directory=directory,
+            recursive=recursive,
+            media_type="audio",
+            preset=preset,
+            folder_analysis_func=analyze_folder_snr,
+            **kwargs
         )
-
-        self.logger.info(f"Processing {len(files)} audio files with preset '{preset}'")
-
-        results = []
-
-        try:
-            if max_workers == 1:
-                # Single-threaded processing
-                for file_path in files:
-                    progress_bar.set_description(f"Processing {file_path.name}")
-                    result = self.process_file(
-                        file_path,
-                        preset=preset,
-                        folder_snr=folder_snr_cache[file_path.parent],
-                        **kwargs,
-                    )
-                    results.append(result)
-                    progress_bar.update(1)
-
-                    # Check for thermal issues even in single-threaded mode
-                    _check_thermal_throttling()
-            else:
-                # Multi-threaded processing with thermal monitoring
-                with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                    future_to_file = {
-                        executor.submit(
-                            self.process_file,
-                            file_path,
-                            preset=preset,
-                            folder_snr=folder_snr_cache[file_path.parent],
-                            **kwargs,
-                        ): file_path
-                        for file_path in files
-                    }
-
-                    completed_count = 0
-                    for future in as_completed(future_to_file):
-                        file_path = future_to_file[future]
-                        try:
-                            result = future.result()
-                            results.append(result)
-                            # Update description with completion status
-                            if result.status == ProcessingStatus.SUCCESS:
-                                progress_bar.set_description(f"✓ Completed {file_path.name}")
-                            elif result.status == ProcessingStatus.SKIPPED:
-                                progress_bar.set_description(f"⏭ Skipped {file_path.name}")
-                            else:
-                                progress_bar.set_description(f"✗ Error {file_path.name}")
-                        except Exception as e:
-                            self.logger.exception(f"Error processing {file_path}: {e}")
-                            results.append(
-                                ProcessingResult(
-                                    source_file=file_path,
-                                    status=ProcessingStatus.ERROR,
-                                    message=f"Threading error: {e}",
-                                )
-                            )
-                            progress_bar.set_description(f"✗ Error {file_path.name}")
-                        finally:
-                            progress_bar.update(1)
-                            completed_count += 1
-
-                            # Check thermal throttling every 5 files
-                            if completed_count % 5 == 0:
-                                _check_thermal_throttling()
-        finally:
-            # Close progress bar
-            progress_bar.close()
-
-            # Always clean up session backups
-            self.file_manager.cleanup_session_backups()
-
-            # Log summary
-            summary = self.file_manager.get_session_summary()
-            self.logger.info(
-                f"Processing complete: {summary['successful_operations']} successful, "
-                f"{summary['failed_operations']} failed, "
-                f"{summary['backups_created']} backups created"
-            )
-
-        return results
 
     def _calculate_effective_bitrate(
         self, file_path: Path, audio_info: dict[str, Any], preset_config, folder_snr: float | None = None
