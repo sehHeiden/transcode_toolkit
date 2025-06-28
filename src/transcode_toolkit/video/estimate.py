@@ -317,57 +317,6 @@ def _estimate_size_by_codec(
         return int(video_info.get("size", 0) * 0.8)
 
 
-def analyze_single_file(file_path: Path, preset_name: str = "default") -> tuple[Path, int, int, QualityDecision] | None:
-    """
-    Analyze a single video file for size estimation using specific preset.
-
-    Args:
-        file_path: Path to video file
-        preset_name: Name of preset to use for estimation
-
-    Returns:
-        Tuple of (path, current_size, estimated_size, quality_decision) or None if failed
-
-    """
-    try:
-        if file_path.suffix.lower() not in VIDEO_EXTS:
-            return None
-
-        # Get preset configuration to use correct codec
-        from ..config import get_config
-
-        config = get_config()
-        preset_config = config.get_video_preset(preset_name)
-        target_codec = preset_config.codec
-
-        # Get video information and analyze content
-        video_info = FFmpegProbe.get_video_info(file_path)
-        analysis = analyze_file(file_path, use_cache=True)
-        complexity = analysis["complexity"]
-
-        # Calculate optimal encoding parameters for this specific preset
-        quality_decision = calculate_optimal_crf(
-            file_path=file_path,
-            video_info=video_info,
-            complexity=complexity,
-            target_ssim=analysis["estimated_ssim_threshold"],
-            force_preset=preset_name,  # Use the actual preset
-        )
-
-        # CRITICAL FIX: Use the actual target codec from the preset
-        current_size = video_info["size"]
-        estimated_size = _estimate_size_by_codec(video_info, quality_decision, target_codec)
-
-        LOG.debug(
-            f"Estimation for {file_path.name}: preset={preset_name}, codec={target_codec}, "
-            f"CRF={quality_decision.effective_crf}, {current_size:,} → {estimated_size:,} bytes"
-        )
-
-        return (file_path, current_size, estimated_size, quality_decision)
-
-    except Exception as e:
-        LOG.warning(f"Failed to analyze {file_path}: {e}")
-        return None
 
 
 def analyse(root: Path) -> list[tuple[Path, int, int, dict[str, Any]]]:
@@ -508,6 +457,28 @@ def analyse(root: Path) -> list[tuple[Path, int, int, dict[str, Any]]]:
     return results
 
 
+def _calculate_preset_score(current: int, estimated: int, metadata: dict[str, Any]) -> float:
+    """Calculate combined score considering savings, SSIM quality, and encoding speed."""
+    savings = current - estimated
+    savings_percent = (savings / current * 100) if current > 0 else 0
+    ssim = metadata.get("predicted_ssim", 0)
+    speed_minutes = metadata.get("speed_minutes", 60)  # Default to 1 hour if unknown
+
+    # Normalize savings percentage (0-100) to 0-1 scale
+    savings_score = min(savings_percent / 50.0, 1.0)  # Cap at 50% savings = perfect score
+
+    # SSIM is already 0-1 scale
+    ssim_score = ssim
+
+    # Speed score: faster = better (inverse relationship)
+    # Normalize speed: 0-60 minutes = 1.0 to 0.0 score
+    # Cap at 120 minutes (anything slower gets 0 speed score)
+    speed_score = max(0.0, 1.0 - (speed_minutes / 120.0))
+
+    # Weight: 30% savings, 60% quality, 10% speed
+    return (0.30 * savings_score) + (0.60 * ssim_score) + (0.10 * speed_score)
+
+
 def print_summary(rows: list[tuple[Path, int, int, dict[str, Any]]], *, csv_path: str | None = None) -> None:
     """Print estimation summary and optionally save to CSV."""
     if not rows:
@@ -519,26 +490,6 @@ def print_summary(rows: list[tuple[Path, int, int, dict[str, Any]]], *, csv_path
         file_results[file_path].append((current, estimated, metadata))
 
     # Calculate totals using ONLY the best preset for each file
-    def calculate_preset_score(current: int, estimated: int, metadata: dict[str, Any]) -> float:
-        """Calculate combined score considering savings, SSIM quality, and encoding speed."""
-        savings = current - estimated
-        savings_percent = (savings / current * 100) if current > 0 else 0
-        ssim = metadata.get("predicted_ssim", 0)
-        speed_minutes = metadata.get("speed_minutes", 60)  # Default to 1 hour if unknown
-
-        # Normalize savings percentage (0-100) to 0-1 scale
-        savings_score = min(savings_percent / 50.0, 1.0)  # Cap at 50% savings = perfect score
-
-        # SSIM is already 0-1 scale
-        ssim_score = ssim
-
-        # Speed score: faster = better (inverse relationship)
-        # Normalize speed: 0-60 minutes = 1.0 to 0.0 score
-        # Cap at 120 minutes (anything slower gets 0 speed score)
-        speed_score = max(0.0, 1.0 - (speed_minutes / 120.0))
-
-        # Weight: 30% savings, 60% quality, 10% speed
-        return (0.30 * savings_score) + (0.60 * ssim_score) + (0.10 * speed_score)
 
     current_total = 0
     estimated_total = 0
@@ -549,7 +500,7 @@ def print_summary(rows: list[tuple[Path, int, int, dict[str, Any]]], *, csv_path
             continue
 
         # Find the best preset for this file
-        best_preset = max(file_presets, key=lambda x: calculate_preset_score(x[0], x[1], x[2]))
+        best_preset = max(file_presets, key=lambda x: _calculate_preset_score(x[0], x[1], x[2]))
 
         current_total += best_preset[0]  # current size
         estimated_total += best_preset[1]  # estimated size
@@ -577,29 +528,8 @@ def print_summary(rows: list[tuple[Path, int, int, dict[str, Any]]], *, csv_path
         print(f"\n📄 {display_name}")
 
         # Find best preset for this file using combined savings, SSIM, and speed score
-        def calculate_preset_score(current: int, estimated: int, metadata: dict[str, Any]) -> float:
-            """Calculate combined score considering savings, SSIM quality, and encoding speed."""
-            savings = current - estimated
-            savings_percent = (savings / current * 100) if current > 0 else 0
-            ssim = metadata.get("predicted_ssim", 0)
-            speed_minutes = metadata.get("speed_minutes", 60)  # Default to 1 hour if unknown
-
-            # Normalize savings percentage (0-100) to 0-1 scale
-            savings_score = min(savings_percent / 50.0, 1.0)  # Cap at 50% savings = perfect score
-
-            # SSIM is already 0-1 scale
-            ssim_score = ssim
-
-            # Speed score: faster = better (inverse relationship)
-            # Normalize speed: 0-60 minutes = 1.0 to 0.0 score
-            # Cap at 120 minutes (anything slower gets 0 speed score)
-            speed_score = max(0.0, 1.0 - (speed_minutes / 120.0))
-
-            # Weight: 30% savings, 60% quality, 10% speed
-            return (0.30 * savings_score) + (0.60 * ssim_score) + (0.10 * speed_score)
-
         best_score = max(
-            calculate_preset_score(current, estimated, metadata) for current, estimated, metadata in file_presets
+            _calculate_preset_score(current, estimated, metadata) for current, estimated, metadata in file_presets
         )
 
         # Filter out redundant presets with same SSIM but worse savings/speed
@@ -657,7 +587,7 @@ def print_summary(rows: list[tuple[Path, int, int, dict[str, Any]]], *, csv_path
             estimated_mb = estimated / (1024**2)
             savings_mb = savings / (1024**2)
 
-            preset_score = calculate_preset_score(current, estimated, metadata)
+            preset_score = _calculate_preset_score(current, estimated, metadata)
             best_indicator = "⭐ YES" if abs(preset_score - best_score) < 0.001 else ""
 
             # Format speed information
@@ -706,12 +636,7 @@ def print_summary(rows: list[tuple[Path, int, int, dict[str, Any]]], *, csv_path
         resolution_stats[resolution]["current"] += current
         resolution_stats[resolution]["estimated"] += estimated
 
-    if len(resolution_stats) > 1:  # Only show breakdown if there are multiple resolutions
-        for resolution, stats in sorted(resolution_stats.items()):
-            current_gb = stats["current"] / (1024**3)
-            stats["estimated"] / (1024**3)
-            saving_gb = (stats["current"] - stats["estimated"]) / (1024**3)
-            (saving_gb / current_gb * 100) if current_gb > 0 else 0
+    # Resolution breakdown removed - information already shown per-file
 
     # Show codec breakdown
     codec_stats: dict[str, dict[str, int]] = defaultdict(lambda: {"count": 0, "current": 0, "estimated": 0})
@@ -722,19 +647,9 @@ def print_summary(rows: list[tuple[Path, int, int, dict[str, Any]]], *, csv_path
         codec_stats[codec]["current"] += current
         codec_stats[codec]["estimated"] += estimated
 
-    if len(codec_stats) > 1:  # Only show breakdown if there are multiple codecs
-        for codec, stats in sorted(codec_stats.items(), key=lambda x: x[1]["current"], reverse=True):
-            current_gb = stats["current"] / (1024**3)
-            stats["estimated"] / (1024**3)
-            saving_gb = (stats["current"] - stats["estimated"]) / (1024**3)
-            (saving_gb / current_gb * 100) if current_gb > 0 else 0
+    # Codec breakdown removed - information already shown per-file
 
-    # Show preset breakdown - ALWAYS show this as it shows all tried presets
-    for preset, stats in sorted(preset_stats.items(), key=lambda x: x[1]["savings"], reverse=True):
-        current_gb = stats["current"] / (1024**3)
-        stats["estimated"] / (1024**3)
-        saving_gb = stats["savings"] / (1024**3)
-        (saving_gb / current_gb * 100) if current_gb > 0 else 0
+    # Preset breakdown removed - information already shown per-file
 
     # Save to CSV if requested
     if csv_path:
