@@ -631,10 +631,11 @@ def print_summary(rows: list[tuple[Path, int, int, dict[str, Any]]], *, csv_path
                 speed_str = f"{hours}h{minutes}m"
 
             target_codec = metadata.get("target_codec", "unknown")
-            
-            # Print preset details
-            print(f"  {preset:12} | CRF {crf:2} | SSIM {ssim:.3f} | {current_mb:6.1f}MB → {estimated_mb:6.1f}MB | Save {savings_mb:5.1f}MB ({savings_percent:4.1f}%) | {speed_str:8} | {target_codec:10} {best_indicator}")
 
+            # Print preset details
+            print(
+                f"  {preset:12} | CRF {crf:2} | SSIM {ssim:.3f} | {current_mb:6.1f}MB → {estimated_mb:6.1f}MB | Save {savings_mb:5.1f}MB ({savings_percent:4.1f}%) | {speed_str:8} | {target_codec:10} {best_indicator}"
+            )
 
     # Analyze presets and find the best one
     preset_stats: dict[str, dict[str, int]] = defaultdict(
@@ -651,9 +652,9 @@ def print_summary(rows: list[tuple[Path, int, int, dict[str, Any]]], *, csv_path
 
     # Find best preset by total savings
     if preset_stats:
-        best_preset = max(preset_stats.items(), key=lambda x: x[1]["savings"])
-        max_savings = best_preset[1]["savings"]
-        (max_savings / best_preset[1]["current"] * 100) if best_preset[1]["current"] > 0 else 0
+        best_preset_key, best_preset_data = max(preset_stats.items(), key=lambda x: x[1]["savings"])
+        max_savings = best_preset_data["savings"]
+        max_savings_percent = (max_savings / best_preset_data["current"] * 100) if best_preset_data["current"] > 0 else 0
 
     # Show breakdown by resolution
     resolution_stats: dict[str, dict[str, int]] = defaultdict(lambda: {"count": 0, "current": 0, "estimated": 0})

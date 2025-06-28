@@ -325,7 +325,7 @@ class VideoProcessor(MediaProcessor):
                 )
 
                 # Get final file size for metadata
-                final_size = operation.target_path.stat().st_size
+                final_size = operation.target_path.stat().st_size if operation.target_path else 0
                 final_savings_percent = ((original_size - final_size) / original_size * 100) if original_size > 0 else 0
 
                 return ProcessingResult(

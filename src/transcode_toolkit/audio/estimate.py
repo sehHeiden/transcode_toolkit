@@ -473,19 +473,21 @@ def print_comparison(results: list[EstimationResult], recommended: str) -> None:
     print("=" * 60)
     print(f"{'Preset':<15} {'Current':<10} {'Estimated':<10} {'Saving':<10} {'%':<8}")
     print("-" * 60)
-    
+
     sorted_results = sorted(results, key=lambda x: x.saving_percent, reverse=True)
-    
+
     for result in sorted_results:
         current_mb = result.current_size / (1024**2)
         estimated_mb = result.estimated_size / (1024**2)
         saving_mb = result.saving / (1024**2)
         star = " ★" if result.preset == recommended else "  "
-        
-        print(f"{result.preset:<15}{star} {current_mb:>7.1f} MB {estimated_mb:>7.1f} MB {saving_mb:>7.1f} MB {result.saving_percent:>6.1f}%")
-    
+
+        print(
+            f"{result.preset:<15}{star} {current_mb:>7.1f} MB {estimated_mb:>7.1f} MB {saving_mb:>7.1f} MB {result.saving_percent:>6.1f}%"
+        )
+
     print("-" * 60)
-    
+
     if recommended == "no_conversion":
         print("\n⚠️  RECOMMENDATION: Keep original files (insufficient savings)")
     else:
@@ -507,12 +509,12 @@ def print_summary(rows: list[tuple[Path, int, int]], *, preset: str, csv_path: s
     if not rows:
         print("No audio files found to analyze.")
         return
-        
+
     cur = sum(r[1] for r in rows)
     new = sum(r[2] for r in rows)
     diff = cur - new
     pct = 0 if cur == 0 else 100 * diff / cur
-    
+
     print()
     print("=" * 50)
     print(f"{'AUDIO ESTIMATION SUMMARY':^50}")
