@@ -517,13 +517,23 @@ def print_summary(rows: list[tuple[Path, int, int, dict[str, Any]]], *, csv_path
     saving_percent = (saving_total / current_total * 100) if current_total > 0 else 0
 
     # Print overall summary
-
-    # We already have file_results from above, no need to recreate it
+    print()
+    print("=" * 80)
+    print(f"{'VIDEO TRANSCODING ESTIMATION SUMMARY':^80}")
+    print("=" * 80)
+    print(f"Total files analyzed: {len(file_results)}")
+    print(f"Current total size: {current_total / (1024**3):.2f} GB")
+    print(f"Estimated total size: {estimated_total / (1024**3):.2f} GB")
+    print(f"Total potential savings: {saving_total / (1024**3):.2f} GB ({saving_percent:.1f}%)")
+    print()
 
     # Print detailed per-file preset comparison
+    print("📁 DETAILED FILE ANALYSIS")
+    print("-" * 80)
 
     for file_path, file_presets in file_results.items():
-        file_path.name[:70] + "..." if len(file_path.name) > 73 else file_path.name
+        display_name = file_path.name[:70] + "..." if len(file_path.name) > 73 else file_path.name
+        print(f"\n📄 {display_name}")
 
         # Find best preset for this file using combined savings, SSIM, and speed score
         def calculate_preset_score(current: int, estimated: int, metadata: dict[str, Any]) -> float:
@@ -597,29 +607,33 @@ def print_summary(rows: list[tuple[Path, int, int, dict[str, Any]]], *, csv_path
 
         for current, estimated, metadata in sorted_presets:
             preset = metadata.get("preset", "unknown")
-            metadata.get("crf", 0)
-            metadata.get("predicted_ssim", 0)
+            crf = metadata.get("crf", 0)
+            ssim = metadata.get("predicted_ssim", 0)
             savings = current - estimated
-            (savings / current * 100) if current > 0 else 0
+            savings_percent = (savings / current * 100) if current > 0 else 0
 
-            current / (1024**2)
-            estimated / (1024**2)
-            savings / (1024**2)
+            current_mb = current / (1024**2)
+            estimated_mb = estimated / (1024**2)
+            savings_mb = savings / (1024**2)
 
             preset_score = calculate_preset_score(current, estimated, metadata)
-            "⭐ YES" if abs(preset_score - best_score) < 0.001 else ""
+            best_indicator = "⭐ YES" if abs(preset_score - best_score) < 0.001 else ""
 
             # Format speed information
             speed_mins = metadata.get("speed_minutes", 0)
             if speed_mins < 1:
-                f"{speed_mins * 60:.0f}s"
+                speed_str = f"{speed_mins * 60:.0f}s"
             elif speed_mins < 60:
-                pass
+                speed_str = f"{speed_mins:.1f}m"
             else:
-                int(speed_mins // 60)
-                int(speed_mins % 60)
+                hours = int(speed_mins // 60)
+                minutes = int(speed_mins % 60)
+                speed_str = f"{hours}h{minutes}m"
 
-            metadata.get("target_codec", "unknown")
+            target_codec = metadata.get("target_codec", "unknown")
+            
+            # Print preset details
+            print(f"  {preset:12} | CRF {crf:2} | SSIM {ssim:.3f} | {current_mb:6.1f}MB → {estimated_mb:6.1f}MB | Save {savings_mb:5.1f}MB ({savings_percent:4.1f}%) | {speed_str:8} | {target_codec:10} {best_indicator}")
 
 
     # Analyze presets and find the best one

@@ -467,27 +467,62 @@ def recommend_preset(results: list[EstimationResult]) -> str:
 
 def print_comparison(results: list[EstimationResult], recommended: str) -> None:
     """Print a formatted comparison of all presets."""
-    for _result in sorted(results, key=lambda x: x.saving_percent, reverse=True):
-        pass
-
+    print()
+    print("=" * 60)
+    print(f"{'AUDIO PRESET COMPARISON':^60}")
+    print("=" * 60)
+    print(f"{'Preset':<15} {'Current':<10} {'Estimated':<10} {'Saving':<10} {'%':<8}")
+    print("-" * 60)
+    
+    sorted_results = sorted(results, key=lambda x: x.saving_percent, reverse=True)
+    
+    for result in sorted_results:
+        current_mb = result.current_size / (1024**2)
+        estimated_mb = result.estimated_size / (1024**2)
+        saving_mb = result.saving / (1024**2)
+        star = " ★" if result.preset == recommended else "  "
+        
+        print(f"{result.preset:<15}{star} {current_mb:>7.1f} MB {estimated_mb:>7.1f} MB {saving_mb:>7.1f} MB {result.saving_percent:>6.1f}%")
+    
+    print("-" * 60)
+    
     if recommended == "no_conversion":
-        pass
+        print("\n⚠️  RECOMMENDATION: Keep original files (insufficient savings)")
     else:
+        print(f"\n★ RECOMMENDED: {recommended}")
         config = get_config()
         preset_config = config.audio.presets.get(recommended)
         if preset_config:
+            print(f"  → Bitrate: {preset_config.bitrate}")
+            print(f"  → Application: {preset_config.application}")
             if preset_config.cutoff:
-                pass
+                print(f"  → Frequency cutoff: {preset_config.cutoff} Hz")
             if preset_config.channels:
-                pass
+                print(f"  → Channels: {preset_config.channels}")
+    print()
 
 
 def print_summary(rows: list[tuple[Path, int, int]], *, preset: str, csv_path: str | None = None) -> None:
     """Print summary of analysis results."""
+    if not rows:
+        print("No audio files found to analyze.")
+        return
+        
     cur = sum(r[1] for r in rows)
     new = sum(r[2] for r in rows)
     diff = cur - new
-    0 if cur == 0 else 100 * diff / cur
+    pct = 0 if cur == 0 else 100 * diff / cur
+    
+    print()
+    print("=" * 50)
+    print(f"{'AUDIO ESTIMATION SUMMARY':^50}")
+    print("=" * 50)
+    print(f"Preset: {preset}")
+    print(f"Files analyzed: {len(rows)}")
+    print(f"Current total size: {cur / (1024**2):.1f} MB")
+    print(f"Estimated total size: {new / (1024**2):.1f} MB")
+    print(f"Total potential savings: {diff / (1024**2):.1f} MB ({pct:.1f}%)")
+    print("=" * 50)
 
     if csv_path:
         csv_path_obj = Path(csv_path)
