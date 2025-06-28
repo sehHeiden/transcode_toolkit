@@ -59,6 +59,7 @@ lint.ignore = [
     "ISC001",  # Implicitly concatenated string literals on one line
     "COM812",  # Trailing comma missing
     "TID252",  # Prefer absolute imports over relative imports from parent modules
+    "T201",    # Allow print statements (needed for CLI output)
 ]
 
 # Allow fix for all enabled rules (when `--fix`) is provided.
