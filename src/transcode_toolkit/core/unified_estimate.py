@@ -164,15 +164,16 @@ def _analyze_video_file(video_file: Path, verbose: bool = False) -> FileAnalysis
     # Use actual available presets from the new CRF/speed system
     config_manager = ConfigManager()
     all_presets = list(config_manager.config.video.presets.keys())
-    
+
     # Filter to practical presets for testing (avoid too many combinations)
     practical_presets = [
-        p for p in all_presets 
-        if any(codec in p for codec in ["h265", "av1", "gpu"]) 
+        p
+        for p in all_presets
+        if any(codec in p for codec in ["h265", "av1", "gpu"])
         and any(speed in p for speed in ["speedfast", "speedmedium", "speedslow"])
         and any(crf in p for crf in ["crf-2", "crf0", "crf2", "crf4"])
     ][:5]  # Limit to 5 presets for performance
-    
+
     presets_to_test = practical_presets if practical_presets else ["default"]
     preset_results = []
 

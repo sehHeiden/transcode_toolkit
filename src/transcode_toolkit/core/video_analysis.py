@@ -552,7 +552,12 @@ def validate_quality_fast(original_path: Path, encoded_path: Path, sample_count:
 
 
 def quick_test_encode(
-    file_path: Path, test_crf: int, test_duration: int = 30, gpu: bool = False, codec: str = "libx265", speed_preset: str = "fast"
+    file_path: Path,
+    test_crf: int,
+    test_duration: int = 30,
+    gpu: bool = False,
+    codec: str = "libx265",
+    speed_preset: str = "fast",
 ) -> tuple[Path | None, float]:
     """
     Quick test encode of a video segment for quality validation.
