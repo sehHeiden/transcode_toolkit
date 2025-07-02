@@ -1,19 +1,19 @@
 # Transcode Toolkit
 
 [![Python](https://img.shields.io/badge/Python-3.13+-3776ab.svg?logo=python&logoColor=white)](https://python.org)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License: GPL v2+](https://img.shields.io/badge/License-GPL%20v2%2B-blue.svg)](LICENSE)
 [![Package Manager](https://img.shields.io/badge/Package%20Manager-uv-ff6b35.svg?logo=python&logoColor=white)](https://github.com/astral-sh/uv)
 [![Code Style](https://img.shields.io/badge/Code%20Style-Ruff-000000.svg?logo=ruff&logoColor=white)](https://github.com/astral-sh/ruff)
 [![Type Checking](https://img.shields.io/badge/Type%20Checking-mypy-1f5582.svg)](https://mypy.readthedocs.io/)
 [![Tests](https://img.shields.io/badge/Tests-pytest-0a9edc.svg?logo=pytest&logoColor=white)](https://pytest.org/)
+[![CI/CD](https://github.com/sehHeiden/transcode_toolkit/workflows/CI/CD%20Pipeline/badge.svg)](https://github.com/sehHeiden/transcode_toolkit/actions)
+[![codecov](https://codecov.io/gh/sehHeiden/transcode_toolkit/branch/main/graph/badge.svg)](https://codecov.io/gh/sehHeiden/transcode_toolkit)
 
 [![FFmpeg](https://img.shields.io/badge/FFmpeg-Required-007808.svg?logo=ffmpeg&logoColor=white)](https://ffmpeg.org/)
 [![Video Codecs](https://img.shields.io/badge/Video-H.265%20%7C%20AV1%20%7C%20H.264-blue.svg)](https://en.wikipedia.org/wiki/High_Efficiency_Video_Coding)
 [![Audio Codecs](https://img.shields.io/badge/Audio-Opus%20%7C%20AAC-orange.svg)](https://opus-codec.org/)
 [![GPU Support](https://img.shields.io/badge/GPU-NVENC%20%7C%20Intel%20QSV%20%7C%20AMD%20AMF-76B900.svg)](https://developer.nvidia.com/ffmpeg)
 [![Platforms](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](https://github.com/sehHeiden/transcode_toolkit)
-[![Build Status](https://img.shields.io/badge/Build-Passing-success.svg)](https://github.com/sehHeiden/transcode_toolkit)
-[![Coverage](https://img.shields.io/badge/Coverage-25%25-red.svg)](https://github.com/sehHeiden/transcode_toolkit)
 
 Unified toolkit for estimating space savings and batch transcoding **video** (H.265/HEVC/AV1) and **audio** (Opus) libraries with a modern, modular architecture.
 
