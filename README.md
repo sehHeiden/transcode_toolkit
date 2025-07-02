@@ -1,6 +1,6 @@
 # Transcode Toolkit
 
-[![Python](https://img.shields.io/badge/Python-3.13+-3776ab.svg?logo=python&logoColor=white)](https://python.org)
+[![Python](https://img.shields.io/badge/Python-3.12+-3776ab.svg?logo=python&logoColor=white)](https://python.org)
 [![License: GPL v2+](https://img.shields.io/badge/License-GPL%20v2%2B-blue.svg)](LICENSE)
 [![Package Manager](https://img.shields.io/badge/Package%20Manager-uv-ff6b35.svg?logo=python&logoColor=white)](https://github.com/astral-sh/uv)
 [![Code Style](https://img.shields.io/badge/Code%20Style-Ruff-000000.svg?logo=ruff&logoColor=white)](https://github.com/astral-sh/ruff)
@@ -231,7 +231,7 @@ ty check .  # Alternative type checker
 
 ## 📋 Requirements
 
-- Python 3.13+
+- Python 3.12+
 - FFmpeg (with ffprobe) in PATH
 - Optional: NVIDIA drivers for GPU-accelerated video transcoding
 
