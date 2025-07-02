@@ -100,9 +100,9 @@ def analyze_directory(directory: Path, save_settings: bool = False) -> tuple[lis
     # Analyze audio tracks in video files
     for video_file in video_files_with_audio:
         try:
-            analysis = _analyze_video_audio_track(video_file, verbose=verbose_mode)
-            if analysis:  # Only add if audio track was successfully analyzed
-                analyses.append(analysis)
+            audio_analysis = _analyze_video_audio_track(video_file, verbose=verbose_mode)
+            if audio_analysis:  # Only add if audio track was successfully analyzed
+                analyses.append(audio_analysis)
             if audio_progress_bar:
                 audio_progress_bar.update(1)
         except Exception as e:
