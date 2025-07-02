@@ -143,6 +143,17 @@ class MediaToolkitConfig:
             raise ValueError(msg)
         return self.video.presets[preset_name]
 
+    def _create_video_preset(self, config: dict[str, Any]) -> VideoPreset:
+        """Create a VideoPreset from a configuration dictionary."""
+        return VideoPreset(
+            crf=config["crf"],
+            codec=config["codec"],
+            preset=config["preset"],
+            description=config.get("description", ""),
+            rate_control=config.get("rate_control"),
+            quality_param=config.get("quality_param"),
+        )
+
     @classmethod
     def _from_dict(cls, data: dict[str, Any]) -> MediaToolkitConfig:
         """Create config from dictionary."""
@@ -196,6 +207,52 @@ class MediaToolkitConfig:
                     LOG.warning(f"Incomplete video preset data for '{name}': missing required fields")
             except Exception as e:
                 LOG.warning(f"Failed to load video preset '{name}': {e}")
+
+        # Generate ALL possible CRF/speed combinations automatically
+        codecs = video_data.get("codecs", [])
+        crf_base = video_data.get("crf_base", {})
+        crf_offsets = video_data.get("crf_offsets", [-6, 0, 2, 6])  # Available CRF offsets
+        speed_options = video_data.get("speed_options", ["medium", "fast", "slow"])  # Available speeds
+
+        # Codec name mapping for preset names
+        codec_names = {
+            "libx265": "h265",
+            "libaom-av1": "av1_best",
+            "libsvtav1": "av1",
+            "librav1e": "av1_fast",
+            "libvvenc": "vvc",
+            "hevc_nvenc": "gpu",
+            "hevc_amf": "amd",
+            "hevc_qsv": "intel",
+        }
+
+        # Generate ALL possible combinations: codec × CRF offset × speed
+        for codec in codecs:
+            short_name = codec_names.get(codec, codec.replace("lib", ""))
+            base_crf = crf_base.get(codec, 24)
+
+            for crf_offset in crf_offsets:
+                for speed_preset in speed_options:
+                    # Create preset name: codec_crf{offset}_speed{speed}
+                    # Examples: h265_crf-12_speedveryslow, av1_crf0_speedmedium
+                    preset_name = f"{short_name}_crf{crf_offset}_speed{speed_preset}"
+
+                    # Calculate final CRF
+                    final_crf = base_crf + crf_offset
+
+                    # Add VideoPreset with completely independent CRF and speed
+                    video_presets[preset_name] = VideoPreset(
+                        crf=final_crf,
+                        codec=codec,
+                        preset=speed_preset,
+                        description=f"{codec} CRF {final_crf} (offset {crf_offset:+d}), speed {speed_preset}",
+                    )
+
+        # Add default preset that aliases a balanced H.265 preset
+        # Look for a preset with CRF offset 0 and medium speed
+        default_preset_name = "h265_crf0_speedmedium"
+        if default_preset_name in video_presets:
+            video_presets["default"] = video_presets[default_preset_name]
 
         video_config = VideoConfig(
             min_savings_percent=video_data.get("min_savings_percent", 10.0),

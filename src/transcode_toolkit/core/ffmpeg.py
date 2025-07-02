@@ -49,7 +49,10 @@ class FFmpegError(ProcessingError):
 
 
 class FFmpegProbe:
-    """FFmpeg probe utility for media file analysis."""
+    """FFmpeg probe utility for media file analysis with intelligent caching."""
+
+    # OPTIMIZATION: Class-level cache for probe results
+    _probe_cache: dict[tuple[Path, float, str], dict[str, Any]] = {}
 
     @staticmethod
     def check_availability() -> None:
@@ -62,10 +65,26 @@ class FFmpegProbe:
             LOG.error(error_msg)
             raise FFmpegError(error_msg)
 
-    @staticmethod
-    def probe_media(file_path: Path, stream_type: str | None = None) -> dict[str, Any]:
-        """Probe media file for metadata."""
-        FFmpegProbe.check_availability()
+    @classmethod
+    def _get_cache_key(cls, file_path: Path, stream_type: str | None) -> tuple[Path, float, str]:
+        """Generate cache key based on file path, modification time, and stream type."""
+        try:
+            mtime = file_path.stat().st_mtime
+            stream_key = stream_type or "all"
+            return (file_path, mtime, stream_key)
+        except OSError:
+            # File doesn't exist or other error - return uncacheable key
+            return (file_path, -1.0, stream_type or "all")
+
+    @classmethod
+    def probe_media(cls, file_path: Path, stream_type: str | None = None) -> dict[str, Any]:
+        """Probe media file for metadata with caching."""
+        # OPTIMIZATION: Check cache first
+        cache_key = cls._get_cache_key(file_path, stream_type)
+        if cache_key[1] >= 0 and cache_key in cls._probe_cache:
+            return cls._probe_cache[cache_key]
+
+        cls.check_availability()
 
         cmd = [
             "ffprobe",
@@ -92,7 +111,14 @@ class FFmpegProbe:
                 encoding="utf-8",
                 errors="replace",
             )
-            return json.loads(result.stdout)
+
+            probe_data = json.loads(result.stdout)
+
+            # OPTIMIZATION: Cache result if valid
+            if cache_key[1] >= 0:
+                cls._probe_cache[cache_key] = probe_data
+
+            return probe_data
         except subprocess.CalledProcessError as e:
             # Capture both stderr and stdout for detailed error info
             error_details = e.stderr or e.stdout or "No error output"
@@ -478,9 +504,12 @@ class FFmpegProcessor:
             # Use the actual codec parameter, not hardcoded hevc_nvenc
             gpu_codec = codec if is_gpu_codec else "hevc_nvenc"
 
-            # Map both CPU presets and custom preset names to GPU presets
+            # For GPU encoders, map CPU FFmpeg presets to GPU equivalents
+            # First get the actual FFmpeg preset from config if available
+            ffmpeg_preset = preset_config.preset if preset_config else preset
+
+            # Map CPU presets to GPU presets
             gpu_preset_map = {
-                # Standard CPU presets
                 "ultrafast": "p1",
                 "superfast": "p1",
                 "veryfast": "p2",
@@ -490,27 +519,8 @@ class FFmpegProcessor:
                 "slow": "p6",
                 "slower": "p7",
                 "veryslow": "p7",
-                # Custom preset names that might be passed
-                "gpu": "p5",
-                "gpu_fast": "p4",
-                "gpu_hq": "p6",
-                "gpu_vfast": "p2",
-                "gpu_h265": "p5",
-                "gpu_h265_hq": "p6",
-                "gpu_h265_f": "p4",
-                "default": "p5",
-                "hq": "p6",
-                "ultra": "p7",
-                "vfast": "p2",
-                "h265": "p5",
-                "h265_hq": "p6",
-                "h265_ultra": "p7",
-                "h265_fast": "p4",
-                "archive": "p7",
-                "stream": "p4",
-                "mobile": "p4",
             }
-            gpu_preset = gpu_preset_map.get(preset, "p5")
+            gpu_preset = gpu_preset_map.get(ffmpeg_preset, "p5")
 
             # NVIDIA NVENC codecs need special rate control parameters
             if "nvenc" in gpu_codec:
@@ -529,10 +539,21 @@ class FFmpegProcessor:
                 # Fallback for unknown GPU codecs
                 cmd.extend(["-c:v", gpu_codec, "-preset", gpu_preset, "-crf", str(crf)])
         else:
-            cmd.extend(["-c:v", codec, "-preset", preset])
+            # For CPU encoders, use the actual FFmpeg preset from config, not the preset name
+            ffmpeg_preset = preset_config.preset if preset_config else preset
+            cmd.extend(["-c:v", codec, "-preset", ffmpeg_preset])
+
+            # Handle different codec quality parameters
             if codec == "libx265":
                 cmd.extend(["-x265-params", f"crf={crf}"])
+            elif codec in ["libaom-av1", "librav1e", "libsvtav1"]:
+                # AV1 codecs use -crf parameter
+                cmd.extend(["-crf", str(crf)])
+            elif codec == "libvvenc":
+                # VVC uses -qp parameter
+                cmd.extend(["-qp", str(crf)])
             else:
+                # Default codecs use -crf
                 cmd.extend(["-crf", str(crf)])
 
         # Audio handling (usually copy)

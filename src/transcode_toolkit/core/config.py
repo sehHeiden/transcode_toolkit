@@ -36,10 +36,35 @@ class ConfigManager:
         self._overrides: dict[str, Any] = {}
         self._context_stack: list[dict[str, Any]] = []
 
+        # Load raw config for dynamic preset building
+        self._raw_config = self._load_raw_config(config_path)
+
+    def _load_raw_config(self, config_path: Path | None = None) -> dict[str, Any]:
+        """Load raw YAML config data."""
+        from pathlib import Path
+
+        import yaml
+
+        if config_path is None:
+            # Use default config path
+            config_path = Path("config.yaml")
+
+        try:
+            with config_path.open("r", encoding="utf-8") as f:
+                return yaml.safe_load(f) or {}
+        except Exception as e:
+            LOG.warning(f"Failed to load raw config from {config_path}: {e}")
+            return {}
+
     @property
     def config(self) -> MediaToolkitConfig:
         """Get the base configuration."""
         return self._config
+
+    @property
+    def raw_config(self) -> dict[str, Any]:
+        """Get the raw YAML configuration data."""
+        return self._raw_config
 
     def get_value(self, key_path: str, default: Any = None) -> Any:
         """Get configuration value with override support."""

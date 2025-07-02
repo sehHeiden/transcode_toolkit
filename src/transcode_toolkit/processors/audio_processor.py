@@ -27,8 +27,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-
-
 class AudioProcessor(MediaProcessor):
     """Audio transcoding processor using Opus codec."""
 
@@ -197,10 +195,10 @@ class AudioProcessor(MediaProcessor):
         """Process all audio files in directory with multithreading."""
         from ..core.audio_analysis import analyze_folder_snr
         from ..core.directory_processor import process_directory_unified
-        
+
         # Extract preset from kwargs
         preset = kwargs.pop("preset", "music")
-        
+
         return process_directory_unified(
             processor=self,
             directory=directory,
@@ -208,7 +206,7 @@ class AudioProcessor(MediaProcessor):
             media_type="audio",
             preset=preset,
             folder_analysis_func=analyze_folder_snr,
-            **kwargs
+            **kwargs,
         )
 
     def _calculate_effective_bitrate(

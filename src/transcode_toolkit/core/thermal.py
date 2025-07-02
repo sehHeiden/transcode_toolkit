@@ -13,10 +13,7 @@ LOG = logging.getLogger(__name__)
 MediaType = Literal["audio", "video"]
 
 
-def get_thermal_safe_worker_count(
-    configured_workers: int | None, 
-    media_type: MediaType = "audio"
-) -> int:
+def get_thermal_safe_worker_count(configured_workers: int | None, media_type: MediaType = "audio") -> int:
     """
     Get a thermally safe number of workers that doesn't overwhelm the system.
 
@@ -29,6 +26,7 @@ def get_thermal_safe_worker_count(
 
     Returns:
         Safe number of workers considering thermal and system constraints
+
     """
     if configured_workers is not None and configured_workers > 0:
         # Still apply thermal safety checks even for manual configuration
@@ -96,6 +94,7 @@ def _get_thermal_limit(media_type: MediaType) -> int:
 
     Returns:
         Maximum recommended workers considering thermal constraints
+
     """
     try:
         # Try to get temperature sensors (Linux systems mostly)
@@ -125,7 +124,7 @@ def _get_thermal_limit(media_type: MediaType) -> int:
         # Check available memory as another thermal/stability indicator
         memory = psutil.virtual_memory()
         memory_threshold = 75 if media_type == "video" else 80
-        
+
         if memory.percent > memory_threshold:
             return 1 if media_type == "video" else 2
 
@@ -140,14 +139,15 @@ def _get_thermal_limit(media_type: MediaType) -> int:
 def check_thermal_throttling(media_type: MediaType) -> None:
     """
     Check for thermal throttling during processing.
-    
+
     Args:
         media_type: Type of media processing for appropriate thresholds
+
     """
     try:
         cpu_percent = psutil.cpu_percent(interval=0.1)
         threshold = 85 if media_type == "video" else 90
-        
+
         if cpu_percent > threshold:
             LOG.warning(f"High CPU usage detected during {media_type} processing: {cpu_percent:.1f}%")
             # Brief pause to allow cooling

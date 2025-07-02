@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from tqdm import tqdm
 
@@ -14,7 +15,7 @@ from .thermal import MediaType, check_thermal_throttling, get_thermal_safe_worke
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from .base import ProcessingResult, ProcessingStatus
+    from .base import ProcessingResult
 
 LOG = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ def process_directory_unified(
 ) -> list[ProcessingResult]:
     """
     Unified directory processing logic for all media processors.
-    
+
     Args:
         processor: The MediaProcessor instance
         directory: Directory to process
@@ -41,9 +42,10 @@ def process_directory_unified(
         max_workers: Maximum number of workers
         folder_analysis_func: Function to analyze folder-level properties
         **kwargs: Additional arguments passed to process_file
-        
+
     Returns:
         List of processing results
+
     """
     # Get worker count from config if not specified
     if max_workers is None:
@@ -70,7 +72,7 @@ def process_directory_unified(
         folder_map: dict[Path, list[Path]] = defaultdict(list)
         for f in all_files:
             folder_map[f.parent].append(f)
-        
+
         for folder, files_in_dir in folder_map.items():
             folder_cache[folder] = folder_analysis_func(folder, files_in_dir)
 
@@ -91,7 +93,7 @@ def process_directory_unified(
             # Single-threaded processing
             for file_path in files:
                 progress_bar.set_description(f"Processing {file_path.name}")
-                
+
                 # Add folder cache data to kwargs if available
                 process_kwargs = kwargs.copy()
                 if folder_cache and file_path.parent in folder_cache:
@@ -99,7 +101,7 @@ def process_directory_unified(
                         process_kwargs["folder_snr"] = folder_cache[file_path.parent]
                     else:  # video
                         process_kwargs["folder_quality"] = folder_cache[file_path.parent]
-                
+
                 result = processor.process_file(file_path, preset=preset, **process_kwargs)
                 results.append(result)
                 progress_bar.update(1)
@@ -110,7 +112,7 @@ def process_directory_unified(
             # Multi-threaded processing with thermal monitoring
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 future_to_file = {}
-                
+
                 for file_path in files:
                     # Add folder cache data to kwargs if available
                     process_kwargs = kwargs.copy()
@@ -119,7 +121,7 @@ def process_directory_unified(
                             process_kwargs["folder_snr"] = folder_cache[file_path.parent]
                         else:  # video
                             process_kwargs["folder_quality"] = folder_cache[file_path.parent]
-                    
+
                     future = executor.submit(processor.process_file, file_path, preset=preset, **process_kwargs)
                     future_to_file[future] = file_path
 
@@ -140,7 +142,7 @@ def process_directory_unified(
                         processor.logger.exception(f"Error processing {file_path}: {e}")
                         # Import ProcessingResult and ProcessingStatus from processor's module
                         from .base import ProcessingResult, ProcessingStatus
-                        
+
                         results.append(
                             ProcessingResult(
                                 source_file=file_path,
@@ -175,11 +177,7 @@ def process_directory_unified(
 
 
 def _analyze_files_parallel(
-    processor: Any, 
-    all_files: list[Path], 
-    preset: str, 
-    max_workers: int, 
-    **kwargs
+    processor: Any, all_files: list[Path], preset: str, max_workers: int, **kwargs
 ) -> list[Path]:
     """Analyze files in parallel to determine which need processing."""
     processor.logger.info(f"Analyzing {len(all_files)} files to determine processing needs...")
@@ -198,10 +196,9 @@ def _analyze_files_parallel(
         # Multi-threaded analysis
         with ThreadPoolExecutor(max_workers=analysis_workers) as executor:
             future_to_file = {
-                executor.submit(processor.should_process, file_path, **kwargs): file_path 
-                for file_path in all_files
+                executor.submit(processor.should_process, file_path, **kwargs): file_path for file_path in all_files
             }
-            
+
             for future in as_completed(future_to_file):
                 file_path = future_to_file[future]
                 try:
@@ -212,5 +209,7 @@ def _analyze_files_parallel(
                     # Include file anyway if analysis fails
                     files_to_process.append(file_path)
 
-    processor.logger.info(f"Will process {len(files_to_process)} files (skipping {len(all_files) - len(files_to_process)})")
+    processor.logger.info(
+        f"Will process {len(files_to_process)} files (skipping {len(all_files) - len(files_to_process)})"
+    )
     return files_to_process

@@ -6,6 +6,8 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ..failure_table import print_failure_table
+
 if TYPE_CHECKING:
     import argparse
 
@@ -23,32 +25,42 @@ class VideoCommands:
         self._working_presets_cache: list[str] | None = None
 
     def _get_working_presets(self) -> list[str]:
-        """Get list of presets that work on this system (cache results)."""
+        """Get available presets from config.yaml codec matrix."""
         if self._working_presets_cache is not None:
             return self._working_presets_cache
 
-        from ...core.ffmpeg import FFmpegProcessor
+        # Get presets directly from config - now using CRF/speed combinations
+        video_config = self.config_manager.raw_config.get("video", {})
+        codecs = video_config.get("codecs", ["libx265"])
+        crf_offsets = video_config.get("crf_offsets", [0, 2, -6])  # Available CRF offsets
+        speed_options = video_config.get("speed_options", ["medium", "fast", "slow"])  # Available speeds
 
-        ffmpeg = FFmpegProcessor()
-        all_presets = self.config_manager.config.video.presets
+        # Generate preset names from ALL CRF/speed combinations
+        codec_names = {
+            "libx265": "h265",
+            "libaom-av1": "av1_best",
+            "libsvtav1": "av1",
+            "librav1e": "av1_fast",
+            "libvvenc": "vvc",
+            "hevc_nvenc": "gpu",
+            "hevc_amf": "amd",
+            "hevc_qsv": "intel",
+        }
+
         working_presets = []
+        for codec in codecs:
+            short_name = codec_names.get(codec, codec.replace("lib", ""))
+            for crf_offset in crf_offsets:
+                for speed_preset in speed_options:
+                    # Create preset name: codec_crf{offset}_speed{speed}
+                    preset_name = f"{short_name}_crf{crf_offset}_speed{speed_preset}"
+                    working_presets.append(preset_name)
 
-        for preset_name, preset_config in all_presets.items():
-            codec = preset_config.codec
-            is_available, _ = ffmpeg.validate_codec(codec)
-
-            if is_available:
-                working_presets.append(preset_name)
-            else:
-                LOG.debug(f"Filtering out preset '{preset_name}' - codec '{codec}' not available")
-
-        # Ensure 'default' is always first if available
-        if "default" in working_presets:
-            working_presets.remove("default")
-            working_presets.insert(0, "default")
+        # Add "default" as first option (points to h265_crf0_speedmedium)
+        working_presets.insert(0, "default")
 
         self._working_presets_cache = working_presets
-        LOG.debug(f"Available presets on this system: {', '.join(working_presets)}")
+        LOG.debug(f"Available presets from codec matrix: {', '.join(working_presets)}")
         return working_presets
 
     def add_subcommands(self, parser: argparse.ArgumentParser) -> None:
@@ -87,6 +99,9 @@ class VideoCommands:
         estimate_parser = subparsers.add_parser("estimate", help="Estimate size savings")
         estimate_parser.add_argument("path", type=Path, help="Path to video file or directory")
         estimate_parser.add_argument("--csv", help="Save results to CSV file")
+        estimate_parser.add_argument(
+            "--save-settings", action="store_true", help="Save optimal settings for future transcoding"
+        )
 
     def handle_command(self, args: argparse.Namespace) -> int:
         """Handle video command execution."""
@@ -168,7 +183,15 @@ class VideoCommands:
                 args.path, recursive=getattr(args, "recursive", True), **process_kwargs
             )
             successful = [r for r in results if r.status.value == "success"]
+            failed = [r for r in results if r.status.value == "error"]
+            skipped = [r for r in results if r.status.value == "skipped"]
+
             LOG.info(f"Processed {len(successful)}/{len(results)} files successfully with preset '{preset_name}'")
+
+            # Show failure table if there are failures
+            if failed:
+                print_failure_table(failed, "video")
+
             return 0 if len(successful) == len(results) else 1
 
         except Exception:
@@ -176,12 +199,23 @@ class VideoCommands:
             return 1
 
     def _handle_estimate(self, args: argparse.Namespace) -> int:
-        """Handle video size estimation."""
+        """Handle detailed video and audio estimation with per-file analysis."""
         try:
-            from ...video import estimate
+            from ...core.unified_estimate import analyze_directory, print_detailed_summary
 
-            rows = estimate.analyse(args.path)
-            estimate.print_summary(rows, csv_path=args.csv)
+            # Use unified estimate with detailed per-file analysis
+            save_settings = getattr(args, "save_settings", False)
+            csv_path = getattr(args, "csv", None)
+
+            # Check if we're in verbose mode
+            verbose_mode = getattr(args, "verbose", 0) > 0
+
+            if not verbose_mode:
+                print("📊 Analyzing media files for optimization opportunities...")
+                print("💡 Use -v for detailed progress information")
+
+            analyses, optimal_presets = analyze_directory(args.path, save_settings=save_settings)
+            print_detailed_summary(analyses, optimal_presets, csv_path=csv_path)
             return 0
 
         except Exception:

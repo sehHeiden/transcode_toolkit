@@ -6,6 +6,8 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ..failure_table import print_failure_table
+
 if TYPE_CHECKING:
     import argparse
 
@@ -84,7 +86,14 @@ class AudioCommands:
                 return 1
             results = processor.process_directory(args.path, recursive=args.recursive, preset=args.preset)
             successful = [r for r in results if r.status.value == "success"]
+            failed = [r for r in results if r.status.value == "error"]
+
             LOG.info("Processed %d/%d files successfully", len(successful), len(results))
+
+            # Show failure table if there are failures
+            if failed:
+                print_failure_table(failed, "audio")
+
             return 0 if len(successful) == len(results) else 1
 
         except Exception:
@@ -95,6 +104,13 @@ class AudioCommands:
         """Handle audio size estimation."""
         try:
             from ...audio import estimate
+
+            # Check if we're in verbose mode
+            verbose_mode = getattr(args, "verbose", 0) > 0
+
+            if not verbose_mode:
+                print("🎵 Analyzing audio files for optimization opportunities...")
+                print("💡 Use -v for detailed progress information")
 
             # Default to comparison mode unless --no-compare is used with a specific preset
             if args.no_compare and args.preset:
@@ -114,7 +130,9 @@ class AudioCommands:
                 recommended = estimate.recommend_preset(results)
                 estimate.print_comparison(results, recommended)
 
-                # Show usage tip
+                if not verbose_mode:
+                    print(f"\n🚀 To apply the recommended preset '{recommended}':")
+                    print(f"   transcode-toolkit audio transcode {args.path} --preset {recommended}")
 
         except Exception:
             LOG.exception("Audio estimation failed")

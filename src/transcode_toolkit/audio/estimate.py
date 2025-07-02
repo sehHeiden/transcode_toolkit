@@ -71,8 +71,6 @@ def _probe(path: Path) -> dict[str, Any]:
     return {"duration": float(fmt.get("duration", 0)), "size": path.stat().st_size}
 
 
-
-
 def _calculate_effective_bitrate_cached(audio_cache: dict[str, Any], preset_config: AudioPreset) -> int:
     """Calculate effective bitrate using cached audio info."""
     target_bitrate_bps = int(preset_config.bitrate.rstrip("k")) * 1000

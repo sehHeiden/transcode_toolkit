@@ -1,0 +1,37 @@
+{
+  "version": "1.0",
+  "analysis_summary": {
+    "total_files": 2,
+    "video_files": 0,
+    "audio_files": 2,
+    "total_current_size_mb": 2.6702880859375e-05,
+    "total_potential_savings_mb": 2.6702880859375e-05,
+    "total_savings_percent": 100.0
+  },
+  "optimal_presets": {
+    "video_preset": null,
+    "audio_preset": "audiobook"
+  },
+  "detailed_analysis": [
+    {
+      "file": "test.flac",
+      "type": "audio",
+      "current_size_mb": 1.33514404296875e-05,
+      "best_preset": "audiobook",
+      "savings_mb": 1.33514404296875e-05,
+      "savings_percent": 50.0,
+      "predicted_ssim": null,
+      "processing_time_min": null
+    },
+    {
+      "file": "test.mp3",
+      "type": "audio",
+      "current_size_mb": 1.33514404296875e-05,
+      "best_preset": "audiobook",
+      "savings_mb": 1.33514404296875e-05,
+      "savings_percent": 50.0,
+      "predicted_ssim": null,
+      "processing_time_min": null
+    }
+  ]
+}

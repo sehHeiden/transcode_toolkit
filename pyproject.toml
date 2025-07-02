@@ -1,7 +1,7 @@
 [project]
 name = "transcode-toolkit"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.2.0"
+description = "Convert Audio/Video files and folders to save space, while keeping similar quality."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -66,10 +66,39 @@ lint.ignore = [
 lint.fixable = ["ALL"]
 lint.unfixable = []
 
-# Per-file ignores
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-v --cov=src/transcode_toolkit --cov-report=term --cov-report=html"
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101"]  # Allow asserts in test files
 "**/test_*.py" = ["S101"]   # Allow asserts in test files
+
+[tool.coverage.run]
+source = ["src"]
+omit = [
+    "*/__init__.py",
+    "*/tests/*",
+    "*/.venv/*",
+    "*/build/*",
+]
+
+[tool.coverage.report]
+exclude_also = [
+    "def __repr__",
+    "if self.debug:",
+    "if settings.DEBUG",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if 0:",
+    "if __name__ == .__main__.:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+]
+ignore_errors = true
+
+[tool.coverage.html]
+directory = "htmlcov"
 
 [tool.mypy]
 ignore_missing_imports = true

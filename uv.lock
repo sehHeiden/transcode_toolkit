@@ -299,6 +299,18 @@ wheels = [
 ]
 
 [[package]]
+name = "pipe-operator"
+version = "2.0.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/46/51/20bc78d9eaefecdd23c56a90ef502a4771ae65eda69f5c4d2cb219188033/pipe_operator-2.0.1.tar.gz", hash = "sha256:e62ed39db42ea3bcc7184b36355603ad81a57fa68462e21868efe9e6444f26f7", size = 25443, upload-time = "2025-04-18T10:09:57.802Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c1/ed/0e513b7af1f6113a77f9642db0952c8f65c203381c5c77bf2db7bc21522c/pipe_operator-2.0.1-py3-none-any.whl", hash = "sha256:022719a95a595e7a7a9a2f5d4fd994683a91508f1b45f8eb75df9675e0afb469", size = 26726, upload-time = "2025-04-18T10:09:56.111Z" },
+]
+
+[[package]]
 name = "platformdirs"
 version = "4.3.8"
 source = { registry = "https://pypi.org/simple" }
@@ -537,6 +549,7 @@ dependencies = [
     { name = "nuitka" },
     { name = "numpy" },
     { name = "opencv-python-headless" },
+    { name = "pipe-operator" },
     { name = "psutil" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -567,6 +580,7 @@ requires-dist = [
     { name = "nuitka", specifier = ">=2.7.7" },
     { name = "numpy", specifier = ">=2.3.0" },
     { name = "opencv-python-headless", specifier = ">=4.11.0.86" },
+    { name = "pipe-operator", specifier = ">=0.7.0" },
     { name = "psutil", specifier = ">=6.1.0" },
     { name = "pydantic", specifier = ">=2.10.0" },
     { name = "pydantic-settings", specifier = ">=2.8.0" },

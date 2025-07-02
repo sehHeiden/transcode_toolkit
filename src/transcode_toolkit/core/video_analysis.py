@@ -91,22 +91,20 @@ def analyze_file(file_path: Path, use_cache: bool = True) -> dict[str, Any]:
 
 def estimate_complexity(file_path: Path, video_info: dict[str, Any]) -> VideoComplexity:
     """
-    Estimate video complexity using fast sampling method.
+    OPTIMIZED: Estimate video complexity using ultra-fast 3-frame sampling.
 
-    Uses strategic frame sampling to avoid processing entire video.
+    Reduced from 5 frames to 3 frames for 40% speed improvement.
     """
     try:
         duration = video_info.get("duration", 0)
         if duration <= 0:
             return VideoComplexity(0.5, 0.5, 0.5, 0.5)
 
-        # Extract 5 strategic frames for analysis
+        # OPTIMIZED: Extract only 3 strategic frames (was 5)
         sample_times = [
-            duration * 0.1,  # 10% mark
-            duration * 0.3,  # 30% mark
+            duration * 0.2,  # 20% mark
             duration * 0.5,  # Middle
-            duration * 0.7,  # 70% mark
-            duration * 0.9,  # 90% mark
+            duration * 0.8,  # 80% mark
         ]
 
         frames = _extract_sample_frames(file_path, sample_times)
@@ -166,38 +164,42 @@ def estimate_complexity(file_path: Path, video_info: dict[str, Any]) -> VideoCom
 
 
 def _extract_sample_frames(file_path: Path, sample_times: list[float]) -> list[np.ndarray | None]:
-    """Extract specific frames from video at given timestamps."""
+    """OPTIMIZED: Extract frames with faster OpenCV operations and smaller scale."""
     frames: list[np.ndarray | None] = []
 
-    for sample_time in sample_times:
-        try:
-            # Use OpenCV to extract frame at specific time
-            cap = cv2.VideoCapture(str(file_path))
-            if not cap.isOpened():
+    # Open once and reuse the capture
+    cap = cv2.VideoCapture(str(file_path))
+    if not cap.isOpened():
+        return [None] * len(sample_times)
+
+    try:
+        # Set buffer size to 1 for faster seeking
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+        for sample_time in sample_times:
+            try:
+                # Seek to specific time
+                cap.set(cv2.CAP_PROP_POS_MSEC, sample_time * 1000)
+                ret, frame = cap.read()
+
+                if ret and frame is not None:
+                    # OPTIMIZED: Resize to even smaller resolution (max 360p for faster analysis)
+                    height, width = frame.shape[:2]
+                    if height > 360:
+                        scale = 360 / height
+                        new_width = int(width * scale)
+                        frame = cv2.resize(frame, (new_width, 360), interpolation=cv2.INTER_LINEAR)
+
+                    frames.append(frame)
+                else:
+                    frames.append(None)
+
+            except Exception as e:
+                LOG.debug(f"Failed to extract frame at {sample_time}s from {file_path}: {e}")
                 frames.append(None)
-                continue
 
-            # Seek to specific time
-            cap.set(cv2.CAP_PROP_POS_MSEC, sample_time * 1000)
-            ret, frame = cap.read()
-
-            if ret and frame is not None:
-                # Resize frame for faster processing (max 480p)
-                height, width = frame.shape[:2]
-                if height > 480:
-                    scale = 480 / height
-                    new_width = int(width * scale)
-                    frame = cv2.resize(frame, (new_width, 480))
-
-                frames.append(frame)
-            else:
-                frames.append(None)
-
-            cap.release()
-
-        except Exception as e:
-            LOG.debug(f"Failed to extract frame at {sample_time}s from {file_path}: {e}")
-            frames.append(None)
+    finally:
+        cap.release()
 
     return frames
 
@@ -524,10 +526,22 @@ def validate_quality_fast(original_path: Path, encoded_path: Path, sample_count:
             orig_gray = cv2.cvtColor(orig, cv2.COLOR_BGR2GRAY) if len(orig.shape) == 3 else orig
             enc_gray = cv2.cvtColor(enc, cv2.COLOR_BGR2GRAY) if len(enc.shape) == 3 else enc
 
-            # Calculate SSIM using OpenCV (faster than scikit-image)
-            ssim_score = cv2.matchTemplate(orig_gray, enc_gray, cv2.TM_CCOEFF_NORMED)[0][0]
-            # Convert to SSIM-like scale (0-1)
-            ssim_score = (ssim_score + 1) / 2
+            # Calculate SSIM using mean squared error as approximation
+            # Convert to float64 for calculation
+            orig_f = orig_gray.astype(np.float64)
+            enc_f = enc_gray.astype(np.float64)
+
+            # Simple SSIM approximation using MSE
+            mse = np.mean((orig_f - enc_f) ** 2)
+            if mse == 0:
+                ssim_score = 1.0  # Identical images
+            else:
+                # Convert MSE to SSIM-like score (higher is better)
+                max_val = 255.0
+                psnr = 20 * np.log10(max_val / np.sqrt(mse))
+                # Convert PSNR to SSIM approximation (rough conversion)
+                ssim_score = min(1.0, max(0.0, (psnr - 20) / 30))  # Scale PSNR 20-50 to SSIM 0-1
+
             ssim_scores.append(ssim_score)
 
         return float(np.mean(ssim_scores)) if ssim_scores else 0.5
@@ -538,7 +552,7 @@ def validate_quality_fast(original_path: Path, encoded_path: Path, sample_count:
 
 
 def quick_test_encode(
-    file_path: Path, test_crf: int, test_duration: int = 30, gpu: bool = False
+    file_path: Path, test_crf: int, test_duration: int = 30, gpu: bool = False, codec: str = "libx265", speed_preset: str = "fast"
 ) -> tuple[Path | None, float]:
     """
     Quick test encode of a video segment for quality validation.
@@ -574,19 +588,61 @@ def quick_test_encode(
             # Extract test segment
             ffmpeg = FFmpegProcessor(timeout=60)
 
-            segment_cmd = [
-                "ffmpeg",
-                "-y",
-                "-ss",
-                str(start_time),
-                "-i",
-                str(file_path),
-                "-t",
-                str(test_duration),
-                "-c",
-                "copy",
-                str(segment_path),
-            ]
+            # For some codecs (like WMV3), copying to MP4 container fails
+            # so we detect incompatible combinations and re-encode if needed
+            video_info = FFmpegProbe.get_video_info(file_path)
+            source_codec = video_info.get("codec", "").lower()
+            needs_reencoding = source_codec in ["wmv3", "wmv2", "wmv1", "vc1"]
+
+            # Check audio compatibility with MP4 container
+            try:
+                audio_info = FFmpegProbe.get_audio_info(file_path)
+                audio_codec = audio_info.get("codec", "").lower()
+                # WMV audio codecs that don't work with MP4
+                audio_incompatible = audio_codec in ["wmav1", "wmav2", "wma", "wmapro"]
+            except Exception:
+                audio_incompatible = True  # Assume incompatible if we can't detect
+
+            if needs_reencoding or audio_incompatible:
+                # Re-encode with compatible codecs
+                segment_cmd = [
+                    "ffmpeg",
+                    "-y",
+                    "-ss",
+                    str(start_time),
+                    "-i",
+                    str(file_path),
+                    "-t",
+                    str(test_duration),
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "fast",
+                    "-crf",
+                    "18",  # High quality for accurate testing
+                    "-c:a",
+                    "aac" if audio_incompatible else "copy",  # Re-encode audio if incompatible
+                    "-b:a",
+                    "128k" if audio_incompatible else "",  # Bitrate for re-encoded audio
+                    str(segment_path),
+                ]
+                # Remove empty strings from command
+                segment_cmd = [arg for arg in segment_cmd if arg]
+            else:
+                # Use stream copy for compatible codecs
+                segment_cmd = [
+                    "ffmpeg",
+                    "-y",
+                    "-ss",
+                    str(start_time),
+                    "-i",
+                    str(file_path),
+                    "-t",
+                    str(test_duration),
+                    "-c",
+                    "copy",
+                    str(segment_path),
+                ]
 
             ffmpeg.run_command(segment_cmd, file_path)
 
@@ -594,9 +650,9 @@ def quick_test_encode(
             encode_cmd = ffmpeg.build_video_command(
                 input_file=segment_path,
                 output_file=encoded_path,
-                codec="hevc_nvenc" if gpu else "libx265",
+                codec=codec,  # Use actual codec from preset
                 crf=test_crf,
-                preset="fast",  # Use fast preset for test
+                preset=speed_preset,  # Use actual speed preset
                 gpu=gpu,
             )
 
