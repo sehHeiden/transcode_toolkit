@@ -13,7 +13,7 @@
 [![GPU Support](https://img.shields.io/badge/GPU-NVENC%20%7C%20Intel%20QSV%20%7C%20AMD%20AMF-76B900.svg)](https://developer.nvidia.com/ffmpeg)
 [![Platforms](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](https://github.com/sehHeiden/transcode_toolkit)
 [![Build Status](https://img.shields.io/badge/Build-Passing-success.svg)](https://github.com/sehHeiden/transcode_toolkit)
-[![Coverage](https://img.shields.io/badge/Coverage-85%25-yellow.svg)](https://github.com/sehHeiden/transcode_toolkit)
+[![Coverage](https://img.shields.io/badge/Coverage-25%25-red.svg)](https://github.com/sehHeiden/transcode_toolkit)
 
 Unified toolkit for estimating space savings and batch transcoding **video** (H.265/HEVC/AV1) and **audio** (Opus) libraries with a modern, modular architecture.
 
