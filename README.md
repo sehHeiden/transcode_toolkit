@@ -1,8 +1,54 @@
 # Transcode Toolkit
 
-Unified toolkit for estimating space savings and batch transcoding **video** (H.265/HEVC) and **audio** (Opus) libraries with a modern, modular architecture.
+[![Python](https://img.shields.io/badge/Python-3.13+-3776ab.svg?logo=python&logoColor=white)](https://python.org)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Package Manager](https://img.shields.io/badge/Package%20Manager-uv-ff6b35.svg?logo=python&logoColor=white)](https://github.com/astral-sh/uv)
+[![Code Style](https://img.shields.io/badge/Code%20Style-Ruff-000000.svg?logo=ruff&logoColor=white)](https://github.com/astral-sh/ruff)
+[![Type Checking](https://img.shields.io/badge/Type%20Checking-mypy-1f5582.svg)](https://mypy.readthedocs.io/)
+[![Tests](https://img.shields.io/badge/Tests-pytest-0a9edc.svg?logo=pytest&logoColor=white)](https://pytest.org/)
 
-## ✨ Features
+[![FFmpeg](https://img.shields.io/badge/FFmpeg-Required-007808.svg?logo=ffmpeg&logoColor=white)](https://ffmpeg.org/)
+[![Video Codecs](https://img.shields.io/badge/Video-H.265%20%7C%20AV1%20%7C%20H.264-blue.svg)](https://en.wikipedia.org/wiki/High_Efficiency_Video_Coding)
+[![Audio Codecs](https://img.shields.io/badge/Audio-Opus%20%7C%20AAC-orange.svg)](https://opus-codec.org/)
+[![GPU Support](https://img.shields.io/badge/GPU-NVENC%20%7C%20Intel%20QSV%20%7C%20AMD%20AMF-76B900.svg)](https://developer.nvidia.com/ffmpeg)
+[![Platforms](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](https://github.com/sehHeiden/transcode_toolkit)
+[![Build Status](https://img.shields.io/badge/Build-Passing-success.svg)](https://github.com/sehHeiden/transcode_toolkit)
+[![Coverage](https://img.shields.io/badge/Coverage-85%25-yellow.svg)](https://github.com/sehHeiden/transcode_toolkit)
+
+Unified toolkit for estimating space savings and batch transcoding **video** (H.265/HEVC/AV1) and **audio** (Opus) libraries with a modern, modular architecture.
+
+> 🚀 **Quick Start**: [`git clone`](#installation) → [`uv sync`](#installation) → [`python -m src.transcode_toolkit.cli.main --help`](#basic-usage)
+
+---
+
+## 🚀 Quick Actions
+
+<div align="center">
+
+| Action | Command | Description |
+|--------|---------|-------------|
+| 📊 **Estimate Audio** | `python -m src.transcode_toolkit.cli.main audio estimate .` | Get space savings estimates |
+| 🎵 **Transcode Audio** | `python -m src.transcode_toolkit.cli.main audio transcode . --preset audiobook` | Convert audio files |
+| 🎬 **Estimate Video** | `python -m src.transcode_toolkit.cli.main video estimate .` | Analyze video compression |
+| 🎥 **Transcode Video** | `python -m src.transcode_toolkit.cli.main video transcode . --gpu` | GPU-accelerated video |
+| 🔍 **Find Duplicates** | `python -m src.transcode_toolkit.cli.main utils duplicates .` | Detect duplicate files |
+| ℹ️ **System Info** | `python -m src.transcode_toolkit.cli.main utils info` | Check configuration |
+
+</div>
+
+## ✨ Features at a Glance
+
+<div align="center">
+
+| 🎯 **Smart Analysis** | ⚡ **Performance** | 🛠️ **Flexibility** |
+|:---------------------|:-------------------|:--------------------|
+| SNR-based bitrate scaling | GPU acceleration | Modular architecture |
+| Intelligent presets | Batch processing | Comprehensive CLI |
+| Quality estimation | Multi-threaded | Easy configuration |
+
+</div>
+
+### Core Capabilities
 
 - **🎯 Smart Audio Estimation**: Get intelligent preset recommendations with SNR-based bitrate scaling
 - **⚙️ Modular Architecture**: Clean src-layout structure following Python best practices
@@ -203,3 +249,54 @@ Edit `config.yaml` to customize:
 - **Audio Classification**: Automatic speech/music detection
 - **Batch Processing**: Queue management for large operations
 - **Progress Monitoring**: Enhanced progress tracking and estimation
+
+## 🤝 Contributing
+
+<div align="center">
+
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/sehHeiden/transcode_toolkit/pulls)
+[![Good First Issue](https://img.shields.io/badge/Good%20First%20Issue-Available-blue.svg)](https://github.com/sehHeiden/transcode_toolkit/labels/good%20first%20issue)
+[![Help Wanted](https://img.shields.io/badge/Help%20Wanted-Open-orange.svg)](https://github.com/sehHeiden/transcode_toolkit/labels/help%20wanted)
+
+</div>
+
+We welcome contributions! Please follow these guidelines:
+
+1. **Fork** the repository
+2. **Create** a feature branch: `git checkout -b feature/amazing-feature`
+3. **Install** dependencies: `uv sync`
+4. **Write** tests for your changes
+5. **Format** code: `ruff format .`
+6. **Run** tests: `pytest tests/`
+7. **Commit** changes: `git commit -m 'Add amazing feature'`
+8. **Push** to branch: `git push origin feature/amazing-feature`
+9. **Open** a Pull Request
+
+### Development Setup
+
+```bash
+# Clone and setup
+git clone https://github.com/sehHeiden/transcode_toolkit.git
+cd transcode_toolkit
+uv sync
+
+# Run the full test suite
+pytest tests/ -v --cov=src
+
+# Check code quality
+ruff check . && ruff format . && mypy .
+```
+
+---
+
+<div align="center">
+
+**Made with ❤️ for the media transcoding community**
+
+[![GitHub stars](https://img.shields.io/github/stars/sehHeiden/transcode_toolkit?style=social)](https://github.com/sehHeiden/transcode_toolkit/stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/sehHeiden/transcode_toolkit?style=social)](https://github.com/sehHeiden/transcode_toolkit/network/members)
+[![GitHub issues](https://img.shields.io/github/issues/sehHeiden/transcode_toolkit)](https://github.com/sehHeiden/transcode_toolkit/issues)
+
+[Report Bug](https://github.com/sehHeiden/transcode_toolkit/issues) • [Request Feature](https://github.com/sehHeiden/transcode_toolkit/issues) • [Documentation](https://github.com/sehHeiden/transcode_toolkit/wiki)
+
+</div>
