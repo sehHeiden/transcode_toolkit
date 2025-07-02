@@ -6,7 +6,7 @@
 [![Code Style](https://img.shields.io/badge/Code%20Style-Ruff-000000.svg?logo=ruff&logoColor=white)](https://github.com/astral-sh/ruff)
 [![Type Checking](https://img.shields.io/badge/Type%20Checking-mypy-1f5582.svg)](https://mypy.readthedocs.io/)
 [![Tests](https://img.shields.io/badge/Tests-pytest-0a9edc.svg?logo=pytest&logoColor=white)](https://pytest.org/)
-[![CI/CD](https://github.com/sehHeiden/transcode_toolkit/workflows/CI/CD%20Pipeline/badge.svg)](https://github.com/sehHeiden/transcode_toolkit/actions)
+[![CI/CD](https://github.com/sehHeiden/transcode_toolkit/actions/workflows/ci.yml/badge.svg)](https://github.com/sehHeiden/transcode_toolkit/actions)
 [![codecov](https://codecov.io/gh/sehHeiden/transcode_toolkit/branch/main/graph/badge.svg)](https://codecov.io/gh/sehHeiden/transcode_toolkit)
 
 [![FFmpeg](https://img.shields.io/badge/FFmpeg-Required-007808.svg?logo=ffmpeg&logoColor=white)](https://ffmpeg.org/)
