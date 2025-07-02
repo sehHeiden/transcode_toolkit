@@ -16,6 +16,3 @@ ERROR_MESSAGE_TRUNCATE_LENGTH = 100  # Maximum length for error message display
 FFPROBE_ERROR_PARTS_COUNT = 3  # Expected parts count in FFprobe error parsing
 FUTURE_RESULT_TUPLE_LENGTH = 3  # Expected tuple length in async results
 MAX_DISPLAYED_GROUPS = 10  # Maximum duplicate groups to display
-
-# Video quality technical thresholds (keep only used constants)
-GRAIN_HIGH_THRESHOLD = 0.7  # High grain content threshold

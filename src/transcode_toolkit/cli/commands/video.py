@@ -25,42 +25,51 @@ class VideoCommands:
         self._working_presets_cache: list[str] | None = None
 
     def _get_working_presets(self) -> list[str]:
-        """Get available presets from config.yaml codec matrix."""
+        """Get available presets from config.yaml, filtered by codec availability."""
         if self._working_presets_cache is not None:
             return self._working_presets_cache
 
-        # Get presets directly from config - now using CRF/speed combinations
-        video_config = self.config_manager.raw_config.get("video", {})
-        codecs = video_config.get("codecs", ["libx265"])
-        crf_offsets = video_config.get("crf_offsets", [0, 2, -6])  # Available CRF offsets
-        speed_options = video_config.get("speed_options", ["medium", "fast", "slow"])  # Available speeds
+        from ...core.ffmpeg import FFmpegProcessor
 
-        # Generate preset names from ALL CRF/speed combinations
-        codec_names = {
-            "libx265": "h265",
-            "libaom-av1": "av1_best",
-            "libsvtav1": "av1",
-            "librav1e": "av1_fast",
-            "libvvenc": "vvc",
-            "hevc_nvenc": "gpu",
-            "hevc_amf": "amd",
-            "hevc_qsv": "intel",
-        }
+        # Get all presets from the loaded configuration
+        all_presets = list(self.config_manager.config.video.presets.keys())
 
+        # Initialize FFmpeg processor for codec validation
+        ffmpeg = FFmpegProcessor()
+
+        # Filter presets based on codec availability
         working_presets = []
-        for codec in codecs:
-            short_name = codec_names.get(codec, codec.replace("lib", ""))
-            for crf_offset in crf_offsets:
-                for speed_preset in speed_options:
-                    # Create preset name: codec_crf{offset}_speed{speed}
-                    preset_name = f"{short_name}_crf{crf_offset}_speed{speed_preset}"
-                    working_presets.append(preset_name)
+        filtered_codecs = set()
 
-        # Add "default" as first option (points to h265_crf0_speedmedium)
-        working_presets.insert(0, "default")
+        for preset_name in all_presets:
+            try:
+                preset_config = self.config_manager.config.get_video_preset(preset_name)
+                codec = preset_config.codec
+
+                # Check if codec is available
+                is_available, error_msg = ffmpeg.validate_codec(codec)
+
+                if is_available:
+                    working_presets.append(preset_name)
+                else:
+                    filtered_codecs.add(f"{codec} ({error_msg})")
+                    LOG.debug(f"Filtering preset '{preset_name}': {error_msg}")
+
+            except Exception as e:
+                LOG.warning(f"Error checking preset '{preset_name}': {e}")
+
+        # Log filtered codecs for user information
+        if filtered_codecs:
+            LOG.info(f"Filtered out presets using unavailable codecs: {', '.join(sorted(filtered_codecs))}")
+
+        # Ensure "default" is first if it's available
+        if "default" in working_presets:
+            working_presets.remove("default")
+            working_presets.insert(0, "default")
 
         self._working_presets_cache = working_presets
-        LOG.debug(f"Available presets from codec matrix: {', '.join(working_presets)}")
+        LOG.info(f"Available presets after codec filtering: {len(working_presets)} out of {len(all_presets)} total")
+        LOG.debug(f"Working presets: {', '.join(working_presets[:10])}{'...' if len(working_presets) > 10 else ''}")
         return working_presets
 
     def add_subcommands(self, parser: argparse.ArgumentParser) -> None:

@@ -11,6 +11,7 @@ from typing import Any
 
 import cv2
 import numpy as np
+from skimage.metrics import structural_similarity as ssim
 
 from .ffmpeg import FFmpegProbe, FFmpegProcessor
 
@@ -297,7 +298,6 @@ def calculate_optimal_crf(
     file_path: Path,
     video_info: dict[str, Any],
     complexity: VideoComplexity,
-    target_ssim: float = 0.92,
     folder_quality: float | None = None,
     force_preset: str | None = None,
     force_crf: int | None = None,
@@ -522,25 +522,16 @@ def validate_quality_fast(original_path: Path, encoded_path: Path, sample_count:
             if orig.shape != enc.shape:
                 enc = cv2.resize(enc, (orig.shape[1], orig.shape[0]))
 
-            # Convert to grayscale and calculate SSIM
+            # Convert to grayscale and calculate real SSIM
             orig_gray = cv2.cvtColor(orig, cv2.COLOR_BGR2GRAY) if len(orig.shape) == 3 else orig
             enc_gray = cv2.cvtColor(enc, cv2.COLOR_BGR2GRAY) if len(enc.shape) == 3 else enc
 
-            # Calculate SSIM using mean squared error as approximation
-            # Convert to float64 for calculation
-            orig_f = orig_gray.astype(np.float64)
-            enc_f = enc_gray.astype(np.float64)
+            # Normalize to 0-1
+            orig_normalized = orig_gray.astype(np.float64) / 255.0
+            enc_normalized = enc_gray.astype(np.float64) / 255.0
 
-            # Simple SSIM approximation using MSE
-            mse = np.mean((orig_f - enc_f) ** 2)
-            if mse == 0:
-                ssim_score = 1.0  # Identical images
-            else:
-                # Convert MSE to SSIM-like score (higher is better)
-                max_val = 255.0
-                psnr = 20 * np.log10(max_val / np.sqrt(mse))
-                # Convert PSNR to SSIM approximation (rough conversion)
-                ssim_score = min(1.0, max(0.0, (psnr - 20) / 30))  # Scale PSNR 20-50 to SSIM 0-1
+            # Calculate SSIM with scikit-image
+            ssim_score = ssim(orig_normalized, enc_normalized, data_range=1.0)
 
             ssim_scores.append(ssim_score)
 
@@ -558,26 +549,37 @@ def quick_test_encode(
     gpu: bool = False,
     codec: str = "libx265",
     speed_preset: str = "fast",
-) -> tuple[Path | None, float]:
+) -> tuple[Path | None, float, dict[str, float]]:
     """
-    Quick test encode of a video segment for quality validation.
+    Unified test encode that measures both SSIM quality and encoding speed.
 
     Args:
         file_path: Source video file
         test_crf: CRF value to test
         test_duration: Duration in seconds to test
         gpu: Whether to use GPU acceleration
+        codec: Encoder codec to use
+        speed_preset: Encoding speed preset
 
     Returns:
-        Tuple of (temp_file_path, estimated_ssim)
+        Tuple of (temp_file_path, measured_ssim, speed_metrics)
+        speed_metrics contains: {"fps": encoding_fps, "processing_time_min": estimated_full_file_time}
 
     """
     try:
         video_info = FFmpegProbe.get_video_info(file_path)
         duration = video_info.get("duration", 0)
 
+        # OPTIMIZED: Adaptive test duration for speed while maintaining accuracy
         if duration < test_duration:
-            test_duration = max(10, int(duration * 0.3))  # Use 30% of video or 10s minimum
+            test_duration = max(5, int(duration * 0.2))  # Use 20% of video or 5s minimum
+        # Further optimize test duration based on video length
+        elif duration <= 120:  # Short videos (<=2 min)
+            test_duration = min(15, int(duration * 0.3))  # Up to 30% or 15s
+        elif duration <= 600:  # Medium videos (<=10 min)
+            test_duration = min(20, int(duration * 0.1))  # Up to 10% or 20s
+        else:  # Long videos
+            test_duration = min(25, int(duration * 0.05))  # Up to 5% or 25s
 
         # Extract test segment from middle of video
         start_time = max(0, (duration - test_duration) / 2)
@@ -665,15 +667,31 @@ def quick_test_encode(
             ffmpeg.run_command(encode_cmd, segment_path)
             encode_time = time.time() - start_time
 
-            # Quick SSIM validation
+            # Measure encoding speed
+            source_fps = video_info.get("fps", 25.0)
+            encoding_fps = (test_duration * source_fps) / encode_time if encode_time > 0 else 0
+
+            # Estimate full file processing time
+            full_duration = video_info.get("duration", 0)
+            estimated_full_time_min = (full_duration / 60) / (encoding_fps / source_fps) if encoding_fps > 0 else 999
+
+            # Quick SSIM validation using intelligent sampling
             ssim_score = validate_quality_fast(segment_path, encoded_path, sample_count=3)
 
-            LOG.debug(f"Test encode completed in {encode_time:.1f}s, SSIM: {ssim_score:.3f}")
+            # Prepare speed metrics
+            speed_metrics = {
+                "fps": encoding_fps,
+                "processing_time_min": estimated_full_time_min,
+                "test_encode_time_sec": encode_time,
+                "source_fps": source_fps,
+            }
+
+            LOG.debug(f"Unified test: {encode_time:.1f}s, {encoding_fps:.1f}fps, SSIM: {ssim_score:.3f}")
 
             # Clean up segment file
             segment_path.unlink(missing_ok=True)
 
-            return encoded_path, ssim_score
+            return encoded_path, ssim_score, speed_metrics
 
         except Exception:
             # Clean up on error
@@ -683,4 +701,4 @@ def quick_test_encode(
 
     except Exception as e:
         LOG.warning(f"Quick test encode failed for {file_path}: {e}")
-        return None, 0.5
+        return None, 0.5, {"fps": 25.0, "processing_time_min": 10.0, "test_encode_time_sec": 0, "source_fps": 25.0}

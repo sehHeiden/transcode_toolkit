@@ -46,8 +46,6 @@ class DuplicateFinder:
         """
         self.max_workers = max_workers or min(32, (os.cpu_count() or 1) + 4)
         self.chunk_size = chunk_size
-        self._size_groups: dict[int, list[FileInfo]] = defaultdict(list)
-        self._hash_groups: dict[str, list[FileInfo]] = defaultdict(list)
 
     def _calculate_file_hash(self, file_path: Path) -> str:
         """Calculate SHA-256 hash of a file."""

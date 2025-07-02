@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from ..core import (
     BackupStrategy,
@@ -106,6 +106,29 @@ class VideoProcessor(MediaProcessor):
         try:
             # Get preset configuration
             preset_config = self.config_manager.config.get_video_preset(preset)
+
+            # Validate codec availability before proceeding
+            codec_to_validate = preset_config.codec
+
+            # Override with GPU codec if --gpu flag is used
+            if kwargs.get("gpu", False):
+                # Try to use a GPU codec instead of the preset codec
+                gpu_codec_map = {
+                    "libx265": "hevc_nvenc",
+                    "libx264": "h264_nvenc",
+                    "libaom-av1": "av1_nvenc",  # If available
+                }
+                codec_to_validate = gpu_codec_map.get(preset_config.codec, "hevc_nvenc")
+
+            is_available, error_msg = self.ffmpeg.validate_codec(codec_to_validate)
+            if not is_available:
+                return ProcessingResult(
+                    source_file=file_path,
+                    status=ProcessingStatus.ERROR,
+                    message=f"Codec validation failed: {error_msg}",
+                    processing_time=0.0,
+                    metadata={"preset": preset, "codec_error": error_msg},
+                )
 
             # Get file info and analyze content
             video_info = FFmpegProbe.get_video_info(file_path)
@@ -280,67 +303,6 @@ class VideoProcessor(MediaProcessor):
                 message=error_msg,
                 processing_time=processing_time,
                 metadata={"preset": preset, "error": str(e)},
-            )
-
-    def _calculate_effective_parameters(
-        self,
-        file_path: Path,
-        video_info: dict[str, Any],
-        preset_config: Any,
-        folder_quality: float | None = None,
-        force_crf: int | None = None,
-        force_preset: str | None = None,
-    ):
-        """Calculate effective encoding parameters using the same logic as estimation module."""
-        try:
-            from ..core.video_analysis import analyze_file, calculate_optimal_crf
-
-            # Analyze video content (reuse estimation logic)
-            analysis = analyze_file(file_path, use_cache=True)
-            complexity = analysis["complexity"]
-
-            # Calculate optimal CRF based on content and target quality
-            target_ssim = folder_quality or analysis["estimated_ssim_threshold"]
-
-            # Use the same CRF calculation as estimation
-            # Only force CRF if explicitly requested, otherwise let algorithm decide
-            quality_decision = calculate_optimal_crf(
-                file_path=file_path,
-                video_info=video_info,
-                complexity=complexity,
-                target_ssim=target_ssim,
-                folder_quality=folder_quality,
-                force_preset=force_preset,  # Use forced preset if provided
-                force_crf=force_crf,  # Only use if explicitly forced, not preset default
-            )
-
-            # Use a simplified SSIM prediction for consistency
-            # Base SSIM degradation: ~1.5% per CRF point
-            reference_crf = 23
-            crf_diff = quality_decision.effective_crf - reference_crf
-            predicted_ssim = max(0.50, min(0.99, target_ssim - (crf_diff * 0.015)))
-
-            # Update quality decision with predicted SSIM for consistency
-            quality_decision.predicted_ssim = predicted_ssim
-
-            self.logger.debug(
-                f"Calculated optimal parameters for {file_path.name}: "
-                f"CRF {quality_decision.effective_crf}, preset {quality_decision.effective_preset}, "
-                f"predicted SSIM {quality_decision.predicted_ssim:.3f}"
-            )
-
-            return quality_decision
-
-        except Exception as e:
-            self.logger.warning(f"Failed to calculate optimal parameters for {file_path}: {e}")
-            # Fallback to preset defaults
-            from ..core.video_analysis import QualityDecision
-
-            return QualityDecision(
-                effective_crf=preset_config.crf,
-                effective_preset=preset_config.preset,
-                limitation_reason="Fallback due to analysis error",
-                predicted_ssim=0.92,
             )
 
     def process_directory(

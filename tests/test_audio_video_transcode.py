@@ -107,35 +107,21 @@ def test_audio_processor_basic(mock_audio_file, mock_config_manager):
                 assert processor.should_process(mock_audio_file, preset="music") == True
 
 
-def test_video_transcode_basic(mock_video_file):
-    """Test basic video transcoding functionality."""
+def test_video_ffmpeg_command_generation(mock_video_file):
+    """Test FFmpeg command generation (this functionality still exists)."""
+    from transcode_toolkit.video.transcode import _ffmpeg_cmd
+
     output_file = mock_video_file.with_suffix(".out.mp4")
 
-    # subprocess is imported inside the function, so patch it there
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value = Mock(returncode=0)
+    # Test CPU command
+    cmd_cpu = _ffmpeg_cmd(mock_video_file, output_file, crf=23, gpu=False)
+    assert "libx265" in cmd_cpu
+    assert "hevc_nvenc" not in cmd_cpu
 
-        from transcode_toolkit.video.transcode import transcode_video
-
-        # Action
-        result = transcode_video(mock_video_file, output_file, crf=24, gpu=False)
-
-        # Validate
-        assert result == True
-        mock_run.assert_called_once()
-
-
-def test_video_should_skip():
-    """Test video skip detection logic."""
-    from transcode_toolkit.video.transcode import _should_skip
-
-    # Test HEVC video with reasonable bitrate should be skipped
-    meta_hevc = {"codec_name": "hevc", "bit_rate": 3_000_000, "height": 1080}
-    assert _should_skip(meta_hevc) == True
-
-    # Test H.264 video should not be skipped
-    meta_h264 = {"codec_name": "h264", "bit_rate": 5_000_000, "height": 1080}
-    assert _should_skip(meta_h264) == False
+    # Test GPU command
+    cmd_gpu = _ffmpeg_cmd(mock_video_file, output_file, crf=23, gpu=True)
+    assert "hevc_nvenc" in cmd_gpu
+    assert "libx265" not in cmd_gpu
 
 
 def test_video_ffmpeg_command():

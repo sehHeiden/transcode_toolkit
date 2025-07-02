@@ -129,7 +129,7 @@ video:
   
   
   # Available CRF offsets - any combination with any speed
-  crf_offsets: [-2, 0, 2, 4, 6, 8, 10,]
+  crf_offsets: [-4, -2, 0, 2, 4, 6, 8, 10,]
   
   # Available FFmpeg speed presets - any combination with any CRF
   speed_options: ["slower", "slow", "medium", "fast", "faster"]

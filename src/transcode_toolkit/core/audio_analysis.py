@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from ..config.constants import (
@@ -20,15 +19,6 @@ LOG = logging.getLogger(__name__)
 # Simple module-level caches
 _file_cache: dict[Path, dict[str, Any]] = {}
 _folder_snr_cache: dict[Path, float] = {}
-
-
-@dataclass
-class BitrateDecision:
-    """Result of effective bitrate calculation."""
-
-    effective_bitrate_bps: int
-    effective_bitrate_str: str
-    limitation_reason: str | None
 
 
 def analyze_file(file_path: Path, use_cache: bool = True) -> dict[str, Any]:

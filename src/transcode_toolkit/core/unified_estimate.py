@@ -33,12 +33,19 @@ class FileAnalysis(NamedTuple):
 
 
 def analyze_directory(directory: Path, save_settings: bool = False) -> tuple[list[FileAnalysis], dict[str, str | None]]:
-    """Analyze all files in directory with detailed per-file metrics."""
+    """
+    Analyze all files in directory with detailed per-file metrics.
+
+    Args:
+        directory: Directory to analyze
+        save_settings: Whether to save settings to JSON file
+
+    """
     # Check if we're in verbose mode
     verbose_mode = LOG.isEnabledFor(logging.INFO)
 
     if verbose_mode:
-        LOG.info(f"🔍 Analyzing {directory} for detailed optimization metrics...")
+        LOG.info(f"🔍 Analyzing {directory} using detailed transcoding tests...")
 
     # Get file extensions from config
     config_manager = ConfigManager()
@@ -71,12 +78,12 @@ def analyze_directory(directory: Path, save_settings: bool = False) -> tuple[lis
     # Create separate progress bars if not in verbose mode
     if not verbose_mode:
         video_progress_bar = (
-            tqdm(total=total_video_files, desc="Analyzing video", unit="file", position=0)
+            tqdm(total=total_video_files, desc="📹 Video analysis", unit="file", position=0, leave=True)
             if total_video_files > 0
             else None
         )
         audio_progress_bar = (
-            tqdm(total=total_audio_files, desc="Analyzing audio", unit="file", position=1)
+            tqdm(total=total_audio_files, desc="🔊 Audio analysis", unit="file", position=1, leave=True)
             if total_audio_files > 0
             else None
         )
@@ -160,21 +167,21 @@ def _analyze_video_file(video_file: Path, verbose: bool = False) -> FileAnalysis
     if verbose:
         LOG.info(f"🎬 Testing presets on {video_file.name} with actual transcoding...")
 
-    # Test all available presets with ACTUAL measurements
-    # Use actual available presets from the new CRF/speed system
+    # Follow config.yaml: Test ALL available presets as defined in config
     config_manager = ConfigManager()
     all_presets = list(config_manager.config.video.presets.keys())
 
-    # Filter to practical presets for testing (avoid too many combinations)
-    practical_presets = [
-        p
-        for p in all_presets
-        if any(codec in p for codec in ["h265", "av1", "gpu"])
-        and any(speed in p for speed in ["speedfast", "speedmedium", "speedslow"])
-        and any(crf in p for crf in ["crf-2", "crf0", "crf2", "crf4"])
-    ][:5]  # Limit to 5 presets for performance
+    # Filter to only working presets (those with available codecs)
+    from ..cli.commands.video import VideoCommands
 
-    presets_to_test = practical_presets if practical_presets else ["default"]
+    video_commands = VideoCommands(config_manager)
+    working_presets = video_commands._get_working_presets()
+
+    # Remove 'default' from the list if it exists (it's usually an alias)
+    presets_to_test = [p for p in working_presets if p != "default"]
+
+    if verbose:
+        LOG.info(f"Testing ALL {len(presets_to_test)} available presets from config.yaml")
     preset_results = []
 
     for preset in presets_to_test:
@@ -200,7 +207,6 @@ def _analyze_video_file(video_file: Path, verbose: bool = False) -> FileAnalysis
                     file_path=video_file,
                     video_info=video_info,
                     complexity=complexity,
-                    target_ssim=0.92,
                     folder_quality=None,
                     force_preset=preset,
                 )
@@ -208,11 +214,20 @@ def _analyze_video_file(video_file: Path, verbose: bool = False) -> FileAnalysis
                 actual_codec = "libx265"  # Fallback
                 actual_preset = "medium"
 
-            # ACTUAL MEASUREMENT: Do real test transcode with preset's actual settings
-            test_duration = min(30, video_info.get("duration", 30) * 0.1)  # 10% of video or 30s max
+            # UNIFIED MEASUREMENT: Single test that measures both SSIM and speed
+            # Use intelligent sampling: shorter test for long videos, longer for short
+            video_duration = video_info.get("duration", 30)
+            if video_duration <= 60:  # Short video
+                test_duration = min(20, video_duration * 0.5)  # Up to 50% or 20s
+            elif video_duration <= 300:  # Medium video (5 min)
+                test_duration = min(30, video_duration * 0.2)  # Up to 20% or 30s
+            else:  # Long video
+                test_duration = min(45, video_duration * 0.1)  # Up to 10% or 45s
+
             is_gpu = "gpu" in preset or "nvenc" in actual_codec or "amf" in actual_codec or "qsv" in actual_codec
 
-            temp_file, measured_ssim = quick_test_encode(
+            # Single unified test that measures both quality and speed
+            temp_file, measured_ssim, speed_metrics = quick_test_encode(
                 video_file,
                 actual_crf,  # Use ACTUAL preset CRF, not calculated
                 int(test_duration),
@@ -237,19 +252,22 @@ def _analyze_video_file(video_file: Path, verbose: bool = False) -> FileAnalysis
                 # Clean up temp file
                 temp_file.unlink()
 
-                # ACTUAL SSIM MEASUREMENT (use measured value)
-                actual_ssim = measured_ssim if measured_ssim > 0 else 0.92  # Default if no measurement
+                # ACTUAL MEASUREMENTS (both from same test)
+                actual_ssim = measured_ssim if measured_ssim > 0 else 0.92
+                actual_speed_fps = speed_metrics.get("fps", 25.0)
+                actual_processing_time = speed_metrics.get("processing_time_min", 10.0)
 
             else:
                 # Fallback to estimation if test encode failed
                 estimated_size_mb = _estimate_video_size(video_info, preset, actual_crf)
                 actual_ssim = 0.92  # Default SSIM estimate
+                # Fallback speed estimation
+                speed_info = _estimate_processing_speed(video_info, preset, actual_crf)
+                actual_speed_fps = speed_info["fps"]
+                actual_processing_time = speed_info["total_minutes"]
 
             savings_mb = current_size_mb - estimated_size_mb
             savings_percent = (savings_mb / current_size_mb * 100) if current_size_mb > 0 else 0
-
-            # Estimate processing speed based on actual preset settings
-            speed_info = _estimate_processing_speed(video_info, preset, actual_crf)
 
             preset_results.append(
                 {
@@ -259,8 +277,8 @@ def _analyze_video_file(video_file: Path, verbose: bool = False) -> FileAnalysis
                     "savings_percent": savings_percent,
                     "predicted_ssim": actual_ssim,  # Use ACTUAL measured SSIM
                     "crf": actual_crf,  # Use ACTUAL preset CRF
-                    "estimated_fps": speed_info["fps"],
-                    "processing_time_min": speed_info["total_minutes"],
+                    "estimated_fps": actual_speed_fps,
+                    "processing_time_min": actual_processing_time,
                 }
             )
 
@@ -269,10 +287,27 @@ def _analyze_video_file(video_file: Path, verbose: bool = False) -> FileAnalysis
         except Exception as e:
             LOG.warning(f"Failed to test preset {preset} on {video_file}: {e}")
 
-    # Find best preset by SSIM first, then savings
+    # Find best preset using weighted evaluation: 0.5*SSIM² + 0.4*savings + 0.1*speed
+    best_result = None
     if preset_results:
-        # Sort by SSIM (descending), then by savings (descending)
-        best_result = max(preset_results, key=lambda x: (x["predicted_ssim"], x["savings_mb"]))
+
+        def score_preset(result):
+            ssim = result.get("predicted_ssim", 0.92)  # Already 0-1 range
+            savings = result.get("savings_percent", 0) / 100.0  # Convert % to 0-1 range
+            speed = 1.0 - min(1.0, result.get("processing_time_min", 10.0) / 60.0)  # Faster = higher score
+
+            # Weighted score with SSIM squared for emphasis
+            score = 0.5 * (ssim**2) + 0.4 * savings + 0.1 * speed
+            LOG.debug(
+                f"    {result['preset']}: SSIM={ssim:.3f}² + savings={savings:.2f} + speed={speed:.2f} = {score:.3f}"
+            )
+            return score
+
+        best_result = max(preset_results, key=score_preset)
+
+        LOG.info(
+            f"Selected {best_result['preset']} with SSIM={best_result['predicted_ssim']:.3f}, savings={best_result['savings_percent']:.1f}%"
+        )
 
     if best_result:
         return FileAnalysis(
@@ -306,8 +341,9 @@ def _analyze_video_file(video_file: Path, verbose: bool = False) -> FileAnalysis
 
 
 def _analyze_video_audio_track(video_file: Path, verbose: bool = False) -> FileAnalysis | None:
-    """Analyze the audio track within a video file using existing audio estimation."""
+    """Analyze the audio track within a video file using direct audio analysis."""
     from ..audio import estimate as audio_estimate
+    from ..config import get_config
 
     try:
         # Check if video file has audio track
@@ -318,54 +354,69 @@ def _analyze_video_audio_track(video_file: Path, verbose: bool = False) -> FileA
         if verbose:
             LOG.info(f"🎵 Analyzing audio track in {video_file.name}...")
 
-        # Create a temporary directory with just this video file for audio analysis
-        # This allows us to reuse the existing compare_presets function
-        temp_parent = video_file.parent
+        # Calculate current audio size within the video file
+        duration = audio_info.get("duration", 0)
+        current_bitrate = audio_info.get("bitrate", 128000)
+        current_audio_size_bytes = (current_bitrate * duration) / 8
+        current_size_mb = current_audio_size_bytes / (1024 * 1024)
 
-        # Use existing audio estimation but only for this file
-        results = audio_estimate.compare_presets(temp_parent)
+        # Get audio codec info
+        codec = audio_info.get("codec", "unknown")
+        sample_rate = audio_info.get("sample_rate", 44100)
+        channels = audio_info.get("channels", 2)
+        
+        if verbose:
+            LOG.info(f"    Audio: {codec}, {current_bitrate}bps, {sample_rate}Hz, {channels}ch, {current_size_mb:.1f}MB")
 
-        # Filter results to only this video file (by checking if the analysis picked up audio from this file)
-        # Since compare_presets analyzes all audio files in the directory, we need to
-        # estimate what portion of the analysis relates to our video file's audio
+        # Use audio estimation logic to find best preset
+        config = get_config()
+        audio_presets = config.audio.presets
+        
+        best_preset = None
+        best_savings_percent = 0
+        
+        # Simple heuristic based on current audio characteristics
+        if channels == 1:  # Mono audio
+            if current_bitrate > 96000:  # High bitrate mono
+                best_preset = "audiobook"
+                best_savings_percent = min(50, (current_bitrate - 64000) / current_bitrate * 100)
+        else:  # Stereo or multi-channel
+            if current_bitrate > 192000:  # High bitrate stereo
+                best_preset = "high"
+                best_savings_percent = min(40, (current_bitrate - 192000) / current_bitrate * 100)
+            elif current_bitrate > 128000:  # Medium bitrate
+                best_preset = "music"
+                best_savings_percent = min(30, (current_bitrate - 128000) / current_bitrate * 100)
+            elif current_bitrate > 96000:  # Lower bitrate but could still optimize
+                best_preset = "music"
+                best_savings_percent = min(20, (current_bitrate - 96000) / current_bitrate * 100)
 
-        if results:
-            # Get the best audio recommendation
-            recommended_preset = audio_estimate.recommend_preset(results)
-            best_result = None
+        # Only recommend if we can achieve meaningful savings
+        if best_preset and best_savings_percent > 15:  # At least 15% savings
+            estimated_size_mb = current_size_mb * (1 - best_savings_percent / 100)
+            savings_mb = current_size_mb - estimated_size_mb
 
-            # Find the result for the recommended preset
-            for result in results:
-                if result.preset == recommended_preset:
-                    best_result = result
-                    break
+            if verbose:
+                LOG.info(f"    Recommended: {best_preset} preset, {best_savings_percent:.1f}% savings")
 
-            if best_result and best_result.saving_percent > 10:  # Only recommend if >10% savings
-                # Calculate the audio portion size from the video file
-                duration = audio_info.get("duration", 0)
-                current_bitrate = audio_info.get("bitrate", 128000)
-                current_audio_size_bytes = (current_bitrate * duration) / 8
-                current_size_mb = current_audio_size_bytes / (1024 * 1024)
-
-                # Estimate savings based on the preset recommendation
-                estimated_size_mb = current_size_mb * (1 - best_result.saving_percent / 100)
-                savings_mb = current_size_mb - estimated_size_mb
-
-                return FileAnalysis(
-                    file_path=video_file,
-                    file_type="audio",  # Mark as audio analysis from video file
-                    current_size_mb=current_size_mb,
-                    best_preset=best_result.preset,
-                    estimated_size_mb=estimated_size_mb,
-                    savings_mb=savings_mb,
-                    savings_percent=best_result.saving_percent,
-                    predicted_ssim=None,  # N/A for audio
-                    estimated_speed_fps=None,  # N/A for audio
-                    processing_time_min=None,  # Could estimate, but not critical
-                    alternatives=[
-                        {"preset": r.preset, "savings_percent": r.saving_percent} for r in results[:3]
-                    ],  # Show top 3 alternatives
-                )
+            return FileAnalysis(
+                file_path=video_file,
+                file_type="audio",  # Mark as audio analysis from video file
+                current_size_mb=current_size_mb,
+                best_preset=best_preset,
+                estimated_size_mb=estimated_size_mb,
+                savings_mb=savings_mb,
+                savings_percent=best_savings_percent,
+                predicted_ssim=None,  # N/A for audio
+                estimated_speed_fps=None,  # N/A for audio
+                processing_time_min=None,  # Could estimate, but not critical
+                alternatives=[
+                    {"preset": "music", "savings_percent": max(0, best_savings_percent - 10)},
+                    {"preset": "high", "savings_percent": max(0, best_savings_percent - 5)},
+                ],
+            )
+        elif verbose:
+            LOG.info(f"    No significant audio optimization needed (current: {current_bitrate}bps)")
 
     except Exception as e:
         if verbose:

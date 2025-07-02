@@ -143,17 +143,6 @@ class MediaToolkitConfig:
             raise ValueError(msg)
         return self.video.presets[preset_name]
 
-    def _create_video_preset(self, config: dict[str, Any]) -> VideoPreset:
-        """Create a VideoPreset from a configuration dictionary."""
-        return VideoPreset(
-            crf=config["crf"],
-            codec=config["codec"],
-            preset=config["preset"],
-            description=config.get("description", ""),
-            rate_control=config.get("rate_control"),
-            quality_param=config.get("quality_param"),
-        )
-
     @classmethod
     def _from_dict(cls, data: dict[str, Any]) -> MediaToolkitConfig:
         """Create config from dictionary."""
@@ -301,9 +290,3 @@ def get_config() -> MediaToolkitConfig:
 
     # Cast to the expected type for static analysis
     return _global_config  # type: ignore
-
-
-def set_config(config: MediaToolkitConfig) -> None:
-    """Set the global configuration instance."""
-    global _global_config
-    _global_config = config

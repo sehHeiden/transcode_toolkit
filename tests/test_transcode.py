@@ -7,9 +7,11 @@ sys.path.insert(0, "src")
 from transcode_toolkit.video import transcode as vt
 
 
-def test_should_skip_detection() -> None:
-    meta = {"codec_name": "hevc", "bit_rate": 3_000_000, "height": 1080}
-    assert vt._should_skip(meta)
+def test_ffmpeg_cmd_cpu() -> None:
+    """Test CPU FFmpeg command generation."""
+    cmd = vt._ffmpeg_cmd(Path("in.mkv"), Path("tmp.mkv"), crf=24, gpu=False)
+    assert "libx265" in cmd
+    assert "hevc_nvenc" not in cmd
 
 
 def test_ffmpeg_cmd_gpu() -> None:

@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING, Any
 
-import psutil
 from tqdm import tqdm
 
 from ..core import (
@@ -338,50 +336,3 @@ class AudioProcessor(MediaProcessor):
 
         self.logger.info(f"Analysis complete: {len(files_to_process)}/{len(all_files)} files need processing")
         return files_to_process
-
-
-def _check_thermal_throttling() -> None:
-    """
-    Check system thermal status and add delays if needed.
-
-    This function monitors CPU usage and temperature (where available)
-    and adds cooling delays if the system appears to be under thermal stress.
-    """
-    try:
-        logger = logging.getLogger(__name__)
-
-        # Check CPU usage
-        cpu_percent = psutil.cpu_percent(interval=0.1)  # Quick check
-
-        # If CPU is very high, add a cooling delay
-        if cpu_percent > 90:
-            logger.warning(f"Very high CPU usage ({cpu_percent:.1f}%), adding cooling delay...")
-            time.sleep(2.0)  # 2 second cooling delay
-        elif cpu_percent > 80:
-            logger.info(f"High CPU usage ({cpu_percent:.1f}%), adding brief cooling delay...")
-            time.sleep(0.5)  # Brief cooling delay
-
-        # Try to check temperature if available
-        try:
-            if hasattr(psutil, "sensors_temperatures"):
-                temps = psutil.sensors_temperatures()
-                if temps:
-                    max_temp = 0
-                    for entries in temps.values():
-                        for entry in entries:
-                            if entry.current and entry.current > max_temp:
-                                max_temp = entry.current
-
-                    if max_temp > 80:
-                        logger.warning(f"High CPU temperature ({max_temp:.1f}°C), adding extended cooling delay...")
-                        time.sleep(5.0)  # Extended cooling delay
-                    elif max_temp > 70:
-                        logger.info(f"Elevated CPU temperature ({max_temp:.1f}°C), adding cooling delay...")
-                        time.sleep(1.0)  # Moderate cooling delay
-        except Exception:
-            # Temperature monitoring not available on this system
-            pass
-
-    except Exception as e:
-        # If monitoring fails, don't crash - just log and continue
-        logging.getLogger(__name__).debug(f"Thermal monitoring failed: {e}")
