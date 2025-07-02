@@ -10,3 +10,12 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Testing and coverage
+.coverage
+.pytest_cache/
+htmlcov/
+
+# Runtime artifacts
+.transcode_settings.json
+*.transcode_settings.json
