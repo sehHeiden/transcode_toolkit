@@ -19,3 +19,6 @@ htmlcov/
 # Runtime artifacts
 .transcode_settings.json
 *.transcode_settings.json
+
+# IDE files
+.idea/
