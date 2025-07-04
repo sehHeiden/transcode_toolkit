@@ -57,9 +57,9 @@ def test_separate_progress_bars_creation():
 
         # Configure tqdm to return different instances based on desc parameter
         def tqdm_side_effect(*args, **kwargs):
-            if kwargs.get("desc") == "Analyzing video":
+            if kwargs.get("desc") == "📹 Video analysis":
                 return mock_video_progress
-            if kwargs.get("desc") == "Analyzing audio":
+            if kwargs.get("desc") == "🔊 Audio analysis":
                 return mock_audio_progress
             return MagicMock()
 
@@ -76,7 +76,7 @@ def test_separate_progress_bars_creation():
         assert mock_tqdm.call_count == 2
 
         # Check video progress bar was created with correct parameters
-        video_calls = [call for call in mock_tqdm.call_args_list if call[1].get("desc") == "Analyzing video"]
+        video_calls = [call for call in mock_tqdm.call_args_list if call[1].get("desc") == "📹 Video analysis"]
         assert len(video_calls) == 1
         video_call = video_calls[0]
         assert video_call[1]["total"] == 1  # 1 video file
@@ -84,7 +84,7 @@ def test_separate_progress_bars_creation():
         assert video_call[1]["position"] == 0
 
         # Check audio progress bar was created with correct parameters
-        audio_calls = [call for call in mock_tqdm.call_args_list if call[1].get("desc") == "Analyzing audio"]
+        audio_calls = [call for call in mock_tqdm.call_args_list if call[1].get("desc") == "🔊 Audio analysis"]
         assert len(audio_calls) == 1
         audio_call = audio_calls[0]
         assert audio_call[1]["total"] == 2  # 1 audio file + 1 video file with audio track
