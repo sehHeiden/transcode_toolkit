@@ -18,6 +18,8 @@ from ..core import (
     ProcessingResult,
     ProcessingStatus,
 )
+from ..core.directory_processor import process_directory_unified
+from ..core.video_analysis import analyze_folder_quality
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -312,9 +314,6 @@ class VideoProcessor(MediaProcessor):
         **kwargs,
     ) -> list[ProcessingResult]:
         """Process all video files in directory with multithreading."""
-        from ..core.directory_processor import process_directory_unified
-        from ..core.video_analysis import analyze_folder_quality
-
         # Extract preset from kwargs
         preset = kwargs.pop("preset", "default")
 

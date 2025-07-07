@@ -7,6 +7,7 @@ import random
 import shutil
 import subprocess
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -21,6 +22,8 @@ from ..config.constants import (
     FUTURE_RESULT_TUPLE_LENGTH,
 )
 from ..config.settings import AudioPreset
+from ..core import FFmpegProbe
+from ..core.ffmpeg import FFmpegError
 
 
 class EstimationResult(NamedTuple):
@@ -180,9 +183,6 @@ def compare_presets(root: Path) -> list[EstimationResult]:
         """Get both basic metadata and bitrate info in one FFprobe call."""
         # Consider refactoring this function for clarity and maintainability
         try:
-            from ..core import FFmpegProbe
-            from ..core.ffmpeg import FFmpegError
-
             # Use FFmpegProbe.get_audio_info which gets everything we need
             audio_info = FFmpegProbe.get_audio_info(file_path)
             return (
@@ -287,8 +287,6 @@ def compare_presets(root: Path) -> list[EstimationResult]:
 
     # Show failed files summary if any
     if failed_files:
-        from collections import Counter
-
         reasons = Counter(reason for _, reason in failed_files)
         most_common = reasons.most_common(3)  # Show top 3 reasons
 

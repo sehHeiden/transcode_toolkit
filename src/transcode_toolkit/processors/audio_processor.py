@@ -20,6 +20,8 @@ from ..core import (
     ProcessingResult,
     ProcessingStatus,
 )
+from ..core.audio_analysis import analyze_folder_snr
+from ..core.directory_processor import process_directory_unified
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -191,9 +193,6 @@ class AudioProcessor(MediaProcessor):
         **kwargs,
     ) -> list[ProcessingResult]:
         """Process all audio files in directory with multithreading."""
-        from ..core.audio_analysis import analyze_folder_snr
-        from ..core.directory_processor import process_directory_unified
-
         # Extract preset from kwargs
         preset = kwargs.pop("preset", "music")
 

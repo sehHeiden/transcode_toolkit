@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from .base import ProcessingResult
+from .base import ProcessingResult, ProcessingStatus
 
 LOG = logging.getLogger(__name__)
 
@@ -141,7 +142,6 @@ def process_directory_unified(
                     except Exception as e:
                         processor.logger.exception(f"Error processing {file_path}: {e}")
                         # Import ProcessingResult and ProcessingStatus from processor's module
-                        from .base import ProcessingResult, ProcessingStatus
 
                         results.append(
                             ProcessingResult(

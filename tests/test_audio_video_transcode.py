@@ -3,6 +3,11 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
+from transcode_toolkit.audio.estimate import compare_presets, recommend_preset
+from transcode_toolkit.core.unified_estimate import analyze_directory
+from transcode_toolkit.processors.audio_processor import AudioProcessor
+from transcode_toolkit.video.transcode import _ffmpeg_cmd
+
 
 @pytest.fixture
 def mock_audio_file(tmp_path):
@@ -66,8 +71,6 @@ def test_audio_estimate_basic(mock_audio_file):
                 "codec": "mp3",
             }
 
-            from transcode_toolkit.audio.estimate import compare_presets, recommend_preset
-
             # Action
             results = compare_presets(mock_audio_file.parent)
             recommended = recommend_preset(results)
@@ -95,8 +98,6 @@ def test_audio_processor_basic(mock_audio_file, mock_config_manager):
             mock_ffmpeg_instance = MagicMock()
             mock_ffmpeg.return_value = mock_ffmpeg_instance
 
-            from transcode_toolkit.processors.audio_processor import AudioProcessor
-
             processor = AudioProcessor(mock_config_manager)
 
             # Test can_process
@@ -109,8 +110,6 @@ def test_audio_processor_basic(mock_audio_file, mock_config_manager):
 
 def test_video_ffmpeg_command_generation(mock_video_file):
     """Test FFmpeg command generation (this functionality still exists)."""
-    from transcode_toolkit.video.transcode import _ffmpeg_cmd
-
     output_file = mock_video_file.with_suffix(".out.mp4")
 
     # Test CPU command
@@ -126,8 +125,6 @@ def test_video_ffmpeg_command_generation(mock_video_file):
 
 def test_video_ffmpeg_command():
     """Test FFmpeg command generation."""
-    from transcode_toolkit.video.transcode import _ffmpeg_cmd
-
     input_path = Path("input.mp4")
     output_path = Path("output.mp4")
 
@@ -152,8 +149,6 @@ def test_unified_estimate_integration(mock_audio_file, mock_video_file):
 
         with patch("transcode_toolkit.core.unified_estimate.FFmpegProbe") as mock_probe:
             mock_probe.get_video_info.return_value = {"size": 10000000, "duration": 300, "width": 1920, "height": 1080}
-
-            from transcode_toolkit.core.unified_estimate import analyze_directory
 
             # Action
             analyses, optimal_presets = analyze_directory(mock_video_file.parent)

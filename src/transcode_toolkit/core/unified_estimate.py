@@ -8,8 +8,11 @@ from typing import Any, NamedTuple
 
 from tqdm import tqdm
 
+from ..audio import estimate as audio_estimate
+from ..cli.commands.video import VideoCommands
+from ..config import get_config
 from . import ConfigManager, FFmpegProbe
-from .video_analysis import analyze_file, calculate_optimal_crf
+from .video_analysis import analyze_file, calculate_optimal_crf, quick_test_encode
 
 LOG = logging.getLogger(__name__)
 
@@ -154,8 +157,6 @@ def analyze_directory(directory: Path, save_settings: bool = False) -> tuple[lis
 
 def _analyze_video_file(video_file: Path, verbose: bool = False) -> FileAnalysis:
     """Analyze a single video file with actual transcoding measurements."""
-    from .video_analysis import quick_test_encode
-
     # Get video info
     video_info = FFmpegProbe.get_video_info(video_file)
     current_size_mb = video_info["size"] / (1024 * 1024)
@@ -172,8 +173,6 @@ def _analyze_video_file(video_file: Path, verbose: bool = False) -> FileAnalysis
     all_presets = list(config_manager.config.video.presets.keys())
 
     # Filter to only working presets (those with available codecs)
-    from ..cli.commands.video import VideoCommands
-
     video_commands = VideoCommands(config_manager)
     working_presets = video_commands._get_working_presets()
 
@@ -342,9 +341,6 @@ def _analyze_video_file(video_file: Path, verbose: bool = False) -> FileAnalysis
 
 def _analyze_video_audio_track(video_file: Path, verbose: bool = False) -> FileAnalysis | None:
     """Analyze the audio track within a video file using direct audio analysis."""
-    from ..audio import estimate as audio_estimate
-    from ..config import get_config
-
     try:
         # Check if video file has audio track
         audio_info = FFmpegProbe.get_audio_info(video_file)
@@ -364,32 +360,33 @@ def _analyze_video_audio_track(video_file: Path, verbose: bool = False) -> FileA
         codec = audio_info.get("codec", "unknown")
         sample_rate = audio_info.get("sample_rate", 44100)
         channels = audio_info.get("channels", 2)
-        
+
         if verbose:
-            LOG.info(f"    Audio: {codec}, {current_bitrate}bps, {sample_rate}Hz, {channels}ch, {current_size_mb:.1f}MB")
+            LOG.info(
+                f"    Audio: {codec}, {current_bitrate}bps, {sample_rate}Hz, {channels}ch, {current_size_mb:.1f}MB"
+            )
 
         # Use audio estimation logic to find best preset
         config = get_config()
         audio_presets = config.audio.presets
-        
+
         best_preset = None
         best_savings_percent = 0
-        
+
         # Simple heuristic based on current audio characteristics
         if channels == 1:  # Mono audio
             if current_bitrate > 96000:  # High bitrate mono
                 best_preset = "audiobook"
                 best_savings_percent = min(50, (current_bitrate - 64000) / current_bitrate * 100)
-        else:  # Stereo or multi-channel
-            if current_bitrate > 192000:  # High bitrate stereo
-                best_preset = "high"
-                best_savings_percent = min(40, (current_bitrate - 192000) / current_bitrate * 100)
-            elif current_bitrate > 128000:  # Medium bitrate
-                best_preset = "music"
-                best_savings_percent = min(30, (current_bitrate - 128000) / current_bitrate * 100)
-            elif current_bitrate > 96000:  # Lower bitrate but could still optimize
-                best_preset = "music"
-                best_savings_percent = min(20, (current_bitrate - 96000) / current_bitrate * 100)
+        elif current_bitrate > 192000:  # High bitrate stereo
+            best_preset = "high"
+            best_savings_percent = min(40, (current_bitrate - 192000) / current_bitrate * 100)
+        elif current_bitrate > 128000:  # Medium bitrate
+            best_preset = "music"
+            best_savings_percent = min(30, (current_bitrate - 128000) / current_bitrate * 100)
+        elif current_bitrate > 96000:  # Lower bitrate but could still optimize
+            best_preset = "music"
+            best_savings_percent = min(20, (current_bitrate - 96000) / current_bitrate * 100)
 
         # Only recommend if we can achieve meaningful savings
         if best_preset and best_savings_percent > 15:  # At least 15% savings
@@ -415,7 +412,7 @@ def _analyze_video_audio_track(video_file: Path, verbose: bool = False) -> FileA
                     {"preset": "high", "savings_percent": max(0, best_savings_percent - 5)},
                 ],
             )
-        elif verbose:
+        if verbose:
             LOG.info(f"    No significant audio optimization needed (current: {current_bitrate}bps)")
 
     except Exception as e:
@@ -427,8 +424,6 @@ def _analyze_video_audio_track(video_file: Path, verbose: bool = False) -> FileA
 
 def _analyze_audio_file(audio_file: Path, verbose: bool = False) -> FileAnalysis:
     """Analyze a single audio file with available presets."""
-    from ..audio import estimate as audio_estimate
-
     current_size_mb = audio_file.stat().st_size / (1024 * 1024)
 
     # Use existing audio estimation for this file

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import traceback
 from pathlib import Path
 
 from ..config.constants import VERBOSE_LOGGING_THRESHOLD
@@ -156,8 +157,6 @@ Examples:
         except Exception:
             logging.getLogger(__name__).exception("Unexpected error")
             if parsed_args.verbose >= VERBOSE_LOGGING_THRESHOLD:
-                import traceback
-
                 traceback.print_exc()
             return 1
 

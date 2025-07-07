@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import Any
+
+import yaml
 
 # Import the existing config system and extend it
 from ..config import MediaToolkitConfig
 from ..config import get_config as _get_global_config
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 LOG = logging.getLogger(__name__)
 
@@ -41,10 +41,6 @@ class ConfigManager:
 
     def _load_raw_config(self, config_path: Path | None = None) -> dict[str, Any]:
         """Load raw YAML config data."""
-        from pathlib import Path
-
-        import yaml
-
         if config_path is None:
             # Use default config path
             config_path = Path("config.yaml")
