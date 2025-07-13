@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from ..config.constants import MIN_FILES_FOR_DUPLICATE_DETECTION
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
 LOG = logging.getLogger(__name__)
@@ -26,7 +27,8 @@ class FileInfo:
     size: int
     hash: str | None = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
+        """Post-initialization validation."""
         if not self.path.exists():
             msg = f"File not found: {self.path}"
             raise FileNotFoundError(msg)
@@ -56,16 +58,16 @@ class DuplicateFinder:
                 while chunk := f.read(self.chunk_size):
                     hash_obj.update(chunk)
             return hash_obj.hexdigest()
-        except Exception as e:
-            LOG.warning(f"Failed to calculate hash for {file_path}: {e}")
+        except (OSError, PermissionError, FileNotFoundError) as e:
+            LOG.warning("Failed to calculate hash for %s: %s", file_path, e)
             raise
 
     def _get_file_size(self, file_path: Path) -> int:
         """Get file size in bytes."""
         try:
             return file_path.stat().st_size
-        except Exception as e:
-            LOG.warning(f"Failed to get size for {file_path}: {e}")
+        except (OSError, PermissionError, FileNotFoundError) as e:
+            LOG.warning("Failed to get size for %s: %s", file_path, e)
             raise
 
     def _collect_files(self, paths: list[Path], extensions: set[str] | None = None) -> list[FileInfo]:
@@ -78,17 +80,16 @@ class DuplicateFinder:
                     try:
                         size = self._get_file_size(path)
                         files.append(FileInfo(path=path, size=size))
-                    except Exception as e:
-                        LOG.warning(f"Skipping {path}: {e}")
+                    except (OSError, PermissionError, FileNotFoundError) as e:
+                        LOG.warning("Skipping %s: %s", path, e)
             elif path.is_dir():
                 for file_path in path.rglob("*"):
-                    if file_path.is_file():
-                        if extensions is None or file_path.suffix.lower() in extensions:
-                            try:
-                                size = self._get_file_size(file_path)
-                                files.append(FileInfo(path=file_path, size=size))
-                            except Exception as e:
-                                LOG.warning(f"Skipping {file_path}: {e}")
+                    if file_path.is_file() and (extensions is None or file_path.suffix.lower() in extensions):
+                        try:
+                            size = self._get_file_size(file_path)
+                            files.append(FileInfo(path=file_path, size=size))
+                        except (OSError, PermissionError, FileNotFoundError) as e:
+                            LOG.warning("Skipping %s: %s", file_path, e)
 
         return files
 
@@ -104,15 +105,16 @@ class DuplicateFinder:
 
     def _calculate_hashes_parallel(self, files: list[FileInfo]) -> list[FileInfo]:
         """Calculate hashes for files in parallel."""
-        LOG.info(f"Calculating hashes for {len(files)} files using {self.max_workers} workers...")
+        LOG.info("Calculating hashes for %d files using %d workers...", len(files), self.max_workers)
 
         def calculate_hash_wrapper(file_info: FileInfo) -> FileInfo:
             try:
                 file_info.hash = self._calculate_file_hash(file_info.path)
+            except (OSError, PermissionError, FileNotFoundError):
+                LOG.exception("Hash calculation failed for %s", file_info.path)
+            else:
                 return file_info
-            except Exception as e:
-                LOG.exception(f"Hash calculation failed for {file_info.path}: {e}")
-                return file_info  # Return with hash=None
+            return file_info  # Return with hash=None
 
         processed_files = []
 
@@ -130,13 +132,13 @@ class DuplicateFinder:
                     # Progress logging
                     if len(processed_files) % max(1, len(files) // 10) == 0:
                         progress = len(processed_files) / len(files) * 100
-                        LOG.info(f"Hash calculation progress: {progress:.1f}%")
+                        LOG.info("Hash calculation progress: %.1f%%", progress)
 
-                except Exception as e:
+                except (OSError, PermissionError, FileNotFoundError, RuntimeError):
                     file_info = future_to_file[future]
-                    LOG.exception(f"Hash calculation error for {file_info.path}: {e}")
+                    LOG.exception("Hash calculation error for %s", file_info.path)
 
-        LOG.info(f"Successfully calculated hashes for {len(processed_files)} files")
+        LOG.info("Successfully calculated hashes for %d files", len(processed_files))
         return processed_files
 
     def _group_by_hash(self, files: list[FileInfo]) -> dict[str, list[FileInfo]]:
@@ -151,7 +153,10 @@ class DuplicateFinder:
         return {hash_val: files for hash_val, files in hash_groups.items() if len(files) > 1}
 
     def find_duplicates(
-        self, paths: list[Path], extensions: set[str] | None = None, progress_callback=None
+        self,
+        paths: list[Path],
+        extensions: set[str] | None = None,
+        progress_callback: Callable[[str], None] | None = None,
     ) -> dict[str, list[Path]]:
         """
         Find duplicate files in the given paths.
@@ -165,14 +170,14 @@ class DuplicateFinder:
             Dictionary mapping hash to list of duplicate file paths
 
         """
-        LOG.info(f"Starting duplicate search in {len(paths)} paths...")
+        LOG.info("Starting duplicate search in %d paths...", len(paths))
 
         if progress_callback:
             progress_callback("Collecting files...")
 
         # Step 1: Collect all files
         all_files = self._collect_files(paths, extensions)
-        LOG.info(f"Found {len(all_files)} files to analyze")
+        LOG.info("Found %d files to analyze", len(all_files))
 
         if len(all_files) < MIN_FILES_FOR_DUPLICATE_DETECTION:
             LOG.info("Not enough files to find duplicates")
@@ -183,7 +188,7 @@ class DuplicateFinder:
 
         # Step 2: Group by size (quick pre-filter)
         size_groups = self._group_by_size(all_files)
-        LOG.info(f"Found {len(size_groups)} size groups with potential duplicates")
+        LOG.info("Found %d size groups with potential duplicates", len(size_groups))
 
         if not size_groups:
             LOG.info("No files with matching sizes found")
@@ -214,7 +219,7 @@ class DuplicateFinder:
             duplicates[hash_val] = file_paths
             total_duplicate_files += len(file_paths)
 
-        LOG.info(f"Found {len(duplicates)} duplicate groups containing {total_duplicate_files} files")
+        LOG.info("Found %d duplicate groups containing %d files", len(duplicates), total_duplicate_files)
 
         if progress_callback:
             progress_callback(f"Found {len(duplicates)} duplicate groups")
@@ -247,8 +252,8 @@ class DuplicateFinder:
                             "files": [str(p) for p in file_paths],
                         }
                     )
-                except Exception as e:
-                    LOG.warning(f"Error calculating size for duplicate group: {e}")
+                except (OSError, PermissionError, AttributeError) as e:
+                    LOG.warning("Error calculating size for duplicate group: %s", e)
 
         # Sort groups by wasted space (descending)
         group_details.sort(key=lambda x: x["wasted_space"], reverse=True)  # type: ignore[arg-type, return-value]

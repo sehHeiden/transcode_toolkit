@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 LOG = logging.getLogger(__name__)
 
 
-def _ffmpeg_cmd(input_path: Path, output_path: Path, *, crf: int = 23, gpu: bool = False) -> list[str]:
+def ffmpeg_cmd(input_path: Path, output_path: Path, *, crf: int = 23, gpu: bool = False) -> list[str]:
     """
     Generate FFmpeg command for video transcoding.
 

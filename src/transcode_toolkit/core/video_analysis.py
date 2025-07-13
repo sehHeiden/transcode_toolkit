@@ -17,6 +17,25 @@ from .ffmpeg import FFmpegProbe, FFmpegProcessor
 
 LOG = logging.getLogger(__name__)
 
+# Constants for magic values
+COLOR_CHANNELS = 3
+ANALYSIS_RESOLUTION = 360
+RESERVED_SMALL_FILE_COUNT = 3
+RESERVED_MEDIUM_FILE_COUNT = 10
+FOUR_K_HEIGHT = 2160
+TWO_K_HEIGHT = 1440
+FULL_HD_HEIGHT = 1080
+HD_HEIGHT = 720
+SHORT_VIDEO_DURATION = 120
+MEDIUM_VIDEO_DURATION = 600
+HIGH_COMPLEXITY_THRESHOLD = 0.8
+MEDIUM_COMPLEXITY_THRESHOLD = 0.6
+LOW_COMPLEXITY_THRESHOLD = 0.3
+HIGH_GRAIN_THRESHOLD = 0.7
+SSIM_THRESHOLD_VERY_HIGH = 0.95
+SSIM_THRESHOLD_HIGH = 0.92
+SSIM_THRESHOLD_MEDIUM = 0.90
+
 # Simple module-level caches
 _file_cache: dict[Path, dict[str, Any]] = {}
 _folder_quality_cache: dict[Path, float] = {}
@@ -42,7 +61,31 @@ class VideoComplexity:
     overall_complexity: float  # 0.0 to 1.0
 
 
-def analyze_file(file_path: Path, use_cache: bool = True) -> dict[str, Any]:
+@dataclass
+class CRFCalculationParams:
+    """Parameters for CRF calculation to reduce function arguments."""
+
+    file_path: Path
+    video_info: dict[str, Any]
+    complexity: VideoComplexity
+    folder_quality: float | None = None
+    force_preset: str | None = None
+    force_crf: int | None = None
+
+
+@dataclass
+class QuickTestParams:
+    """Parameters for quick test encoding to reduce function arguments."""
+
+    file_path: Path
+    test_crf: int
+    test_duration: int
+    gpu: bool = False
+    codec: str = "libx265"
+    speed_preset: str = "medium"
+
+
+def analyze_file(file_path: Path, *, use_cache: bool = True) -> dict[str, Any]:
     """Get video analysis for a single file with caching."""
     if use_cache and file_path in _file_cache:
         return _file_cache[file_path]
@@ -50,7 +93,7 @@ def analyze_file(file_path: Path, use_cache: bool = True) -> dict[str, Any]:
     try:
         video_info = FFmpegProbe.get_video_info(file_path)
         complexity = estimate_complexity(file_path, video_info)
-        estimated_ssim = estimate_ssim_threshold(file_path, video_info, complexity)
+        estimated_ssim = estimate_ssim_threshold(video_info, complexity)
 
         analysis = {
             "duration": video_info["duration"],
@@ -66,11 +109,8 @@ def analyze_file(file_path: Path, use_cache: bool = True) -> dict[str, Any]:
 
         if use_cache:
             _file_cache[file_path] = analysis
-
-        return analysis
-
-    except Exception as e:
-        LOG.warning(f"Failed to analyze {file_path}: {e}")
+    except (OSError, RuntimeError, ValueError) as e:
+        LOG.warning("Failed to analyze %s: %s", file_path, e)
         # Return minimal analysis with defaults
         analysis = {
             "duration": 0.0,
@@ -83,11 +123,10 @@ def analyze_file(file_path: Path, use_cache: bool = True) -> dict[str, Any]:
             "complexity": VideoComplexity(0.5, 0.5, 0.5, 0.5),
             "estimated_ssim_threshold": 0.92,  # Conservative default
         }
-
         if use_cache:
             _file_cache[file_path] = analysis
 
-        return analysis
+    return analysis
 
 
 def estimate_complexity(file_path: Path, video_info: dict[str, Any]) -> VideoComplexity:
@@ -122,7 +161,7 @@ def estimate_complexity(file_path: Path, video_info: dict[str, Any]) -> VideoCom
                 continue
 
             # Convert to grayscale for analysis
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == COLOR_CHANNELS else frame
 
             # Detail analysis using edge detection
             edges = cv2.Canny(gray, 50, 150)
@@ -138,7 +177,9 @@ def estimate_complexity(file_path: Path, video_info: dict[str, Any]) -> VideoCom
                 prev_frame = frames[i - 1]
                 if prev_frame is not None:  # Additional check for mypy
                     prev_gray = (
-                        cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY) if len(prev_frame.shape) == 3 else prev_frame
+                        cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+                        if len(prev_frame.shape) == COLOR_CHANNELS
+                        else prev_frame
                     )
                     diff = cv2.absdiff(gray, prev_gray)
                     motion_score = min(1.0, float(np.mean(diff)) / 255.0 * 5.0)  # Scale up motion sensitivity
@@ -159,8 +200,8 @@ def estimate_complexity(file_path: Path, video_info: dict[str, Any]) -> VideoCom
             motion_score=avg_motion, detail_score=avg_detail, grain_score=avg_grain, overall_complexity=overall
         )
 
-    except Exception as e:
-        LOG.warning(f"Failed to estimate complexity for {file_path}: {e}")
+    except (OSError, ValueError, RuntimeError) as e:
+        LOG.warning("Failed to estimate complexity for %s: %s", file_path, e)
         return VideoComplexity(0.5, 0.5, 0.5, 0.5)
 
 
@@ -186,17 +227,17 @@ def _extract_sample_frames(file_path: Path, sample_times: list[float]) -> list[n
                 if ret and frame is not None:
                     # OPTIMIZED: Resize to even smaller resolution (max 360p for faster analysis)
                     height, width = frame.shape[:2]
-                    if height > 360:
-                        scale = 360 / height
+                    if height > ANALYSIS_RESOLUTION:
+                        scale = ANALYSIS_RESOLUTION / height
                         new_width = int(width * scale)
-                        frame = cv2.resize(frame, (new_width, 360), interpolation=cv2.INTER_LINEAR)
+                        frame = cv2.resize(frame, (new_width, ANALYSIS_RESOLUTION), interpolation=cv2.INTER_LINEAR)
 
                     frames.append(frame)
                 else:
                     frames.append(None)
 
-            except Exception as e:
-                LOG.debug(f"Failed to extract frame at {sample_time}s from {file_path}: {e}")
+            except (OSError, ValueError, RuntimeError) as e:
+                LOG.debug("Failed to extract frame at %ss from %s: %s", sample_time, file_path, e)
                 frames.append(None)
 
     finally:
@@ -205,38 +246,38 @@ def _extract_sample_frames(file_path: Path, sample_times: list[float]) -> list[n
     return frames
 
 
-def estimate_ssim_threshold(file_path: Path, video_info: dict[str, Any], complexity: VideoComplexity) -> float:
+def estimate_ssim_threshold(video_info: dict[str, Any], complexity: VideoComplexity) -> float:
     """Estimate appropriate SSIM threshold based on content complexity and quality."""
     try:
         # Base SSIM threshold
         base_threshold = 0.92
 
         # Adjust based on complexity
-        if complexity.overall_complexity > 0.8:
+        if complexity.overall_complexity > HIGH_COMPLEXITY_THRESHOLD:
             # Very complex content (action scenes) - more permissive
             base_threshold = 0.88
-        elif complexity.overall_complexity > 0.6:
+        elif complexity.overall_complexity > MEDIUM_COMPLEXITY_THRESHOLD:
             # Medium complexity - slightly more permissive
             base_threshold = 0.90
-        elif complexity.overall_complexity < 0.3:
+        elif complexity.overall_complexity < LOW_COMPLEXITY_THRESHOLD:
             # Simple content (talking heads) - can be more strict
             base_threshold = 0.95
 
         # Adjust based on resolution
         height = video_info.get("height", 1080)
-        if height >= 2160:  # 4K
+        if height >= FOUR_K_HEIGHT:  # 4K
             base_threshold -= 0.02  # Slightly more permissive for 4K
-        elif height <= 720:  # HD or lower
+        elif height <= HD_HEIGHT:  # HD or lower
             base_threshold += 0.01  # Slightly more strict for lower res
 
         # Adjust based on grain content
-        if complexity.grain_score > 0.7:
+        if complexity.grain_score > HIGH_GRAIN_THRESHOLD:
             base_threshold -= 0.03  # More permissive for grainy content
 
         # Clamp to reasonable range
         return max(0.85, min(0.98, base_threshold))
 
-    except Exception:
+    except (OSError, ValueError, RuntimeError):
         return 0.92  # Safe default
 
 
@@ -250,9 +291,9 @@ def analyze_folder_quality(folder: Path, video_files: list[Path], sample_percent
         return 0.92
 
     # Conservative sampling strategy similar to audio
-    if total_files <= 3:
+    if total_files <= RESERVED_SMALL_FILE_COUNT:
         samples = video_files[:]  # All files
-    elif total_files <= 10:
+    elif total_files <= RESERVED_MEDIUM_FILE_COUNT:
         samples = video_files[1:-1]  # Skip first/last
     else:
         # Large folder: sample percentage, minimum 3 files
@@ -280,21 +321,25 @@ def analyze_folder_quality(folder: Path, video_files: list[Path], sample_percent
             analysis = analyze_file(file_path, use_cache=True)
             complexity_scores.append(analysis["complexity"].overall_complexity)
             ssim_thresholds.append(analysis["estimated_ssim_threshold"])
-        except Exception:
+        except (OSError, ValueError, RuntimeError):
             continue
 
     # Use most conservative (lowest) SSIM threshold from samples
     folder_threshold = min(ssim_thresholds) if ssim_thresholds else 0.92
 
     LOG.debug(
-        f"Folder {folder.name} SSIM threshold: {folder_threshold:.3f} ({len(ssim_thresholds)} samples from {total_files} files)"
+        "Folder %s SSIM threshold: %.3f (%d samples from %d files)",
+        folder.name,
+        folder_threshold,
+        len(ssim_thresholds),
+        total_files,
     )
 
     _folder_quality_cache[folder] = folder_threshold
     return folder_threshold
 
 
-def calculate_optimal_crf(
+def calculate_optimal_crf(  # noqa: C901, PLR0912, PLR0913, PLR0915
     file_path: Path,
     video_info: dict[str, Any],
     complexity: VideoComplexity,
@@ -308,6 +353,10 @@ def calculate_optimal_crf(
     Uses lookup tables and content analysis for fast parameter selection.
 
     Args:
+        file_path: Path to the video file being analyzed
+        video_info: Video metadata from FFprobe
+        complexity: Video complexity analysis result
+        folder_quality: Optional folder-wide quality threshold
         force_preset: Override automatic preset selection
         force_crf: Override automatic CRF calculation
 
@@ -317,7 +366,7 @@ def calculate_optimal_crf(
         if folder_quality is not None:
             effective_target = folder_quality
         else:
-            effective_target = estimate_ssim_threshold(file_path, video_info, complexity)
+            effective_target = estimate_ssim_threshold(video_info, complexity)
 
         # Check if source is already heavily compressed
         source_bitrate = video_info.get("bitrate", 0) or 0
@@ -347,7 +396,7 @@ def calculate_optimal_crf(
         # Preset configs now handle GPU-specific CRF values
         crf_adjustment = 0
 
-        if height >= 2160:  # 4K
+        if height >= FOUR_K_HEIGHT:  # 4K
             if is_heavily_compressed:
                 crf_lookup = {
                     (0.0, 0.3): (32 + crf_adjustment, 28 + crf_adjustment, 26 + crf_adjustment, 22 + crf_adjustment),
@@ -361,7 +410,7 @@ def calculate_optimal_crf(
                     (0.6, 1.0): (24 + crf_adjustment, 20 + crf_adjustment, 18 + crf_adjustment, 14 + crf_adjustment),
                 }
             preset = "slow"  # 4K benefits from slower preset
-        elif height >= 1440:  # 1440p
+        elif height >= TWO_K_HEIGHT:  # 1440p
             if is_heavily_compressed:
                 crf_lookup = {
                     (0.0, 0.3): (30 + crf_adjustment, 26 + crf_adjustment, 24 + crf_adjustment, 20 + crf_adjustment),
@@ -375,7 +424,7 @@ def calculate_optimal_crf(
                     (0.6, 1.0): (22 + crf_adjustment, 18 + crf_adjustment, 16 + crf_adjustment, 12 + crf_adjustment),
                 }
             preset = "medium"
-        elif height >= 1080:  # 1080p
+        elif height >= FULL_HD_HEIGHT:  # 1080p
             if is_heavily_compressed:
                 crf_lookup = {
                     (0.0, 0.3): (29 + crf_adjustment, 25 + crf_adjustment, 23 + crf_adjustment, 19 + crf_adjustment),
@@ -419,15 +468,15 @@ def calculate_optimal_crf(
 
             # Only make small adjustments for complexity
             complexity_val = complexity.overall_complexity
-            if complexity_val > 0.8:  # Very high complexity
+            if complexity_val > HIGH_COMPLEXITY_THRESHOLD:  # Very high complexity
                 selected_crf = max(24, selected_crf - 2)
-            elif complexity_val > 0.6:  # Medium-high complexity
+            elif complexity_val > MEDIUM_COMPLEXITY_THRESHOLD:  # Medium-high complexity
                 selected_crf = max(26, selected_crf - 1)
-            elif complexity_val < 0.3:  # Low complexity
+            elif complexity_val < LOW_COMPLEXITY_THRESHOLD:  # Low complexity
                 selected_crf = min(32, selected_crf + 2)
 
             # Minimal adjustment for grain (GPU encoders don't handle grain as well)
-            if complexity.grain_score > 0.7:
+            if complexity.grain_score > HIGH_GRAIN_THRESHOLD:
                 selected_crf = max(22, selected_crf - 1)
         else:
             # Standard CPU encoder CRF calculation
@@ -437,18 +486,18 @@ def calculate_optimal_crf(
             for (min_c, max_c), crfs in crf_lookup.items():
                 if min_c <= complexity_val < max_c:
                     # Select CRF based on target SSIM
-                    if effective_target >= 0.95:
+                    if effective_target >= SSIM_THRESHOLD_VERY_HIGH:
                         selected_crf = crfs[3]
-                    elif effective_target >= 0.92:
+                    elif effective_target >= SSIM_THRESHOLD_HIGH:
                         selected_crf = crfs[2]
-                    elif effective_target >= 0.90:
+                    elif effective_target >= SSIM_THRESHOLD_MEDIUM:
                         selected_crf = crfs[1]
                     else:
                         selected_crf = crfs[0]
                     break
 
             # Adjust for grain content
-            if complexity.grain_score > 0.7:
+            if complexity.grain_score > HIGH_GRAIN_THRESHOLD:
                 selected_crf = max(10, selected_crf - 2)  # Lower CRF for grainy content
 
         # Use forced preset if provided, otherwise use calculated preset
@@ -457,11 +506,11 @@ def calculate_optimal_crf(
 
         # Determine limitation reason
         limitation_reason = None
-        if complexity.overall_complexity > 0.8:
+        if complexity.overall_complexity > HIGH_COMPLEXITY_THRESHOLD:
             limitation_reason = "High complexity content requires lower CRF"
-        elif complexity.grain_score > 0.7:
+        elif complexity.grain_score > HIGH_GRAIN_THRESHOLD:
             limitation_reason = "Grainy content requires lower CRF"
-        elif height >= 2160:
+        elif height >= FOUR_K_HEIGHT:
             limitation_reason = "4K resolution requires optimized settings"
 
         return QualityDecision(
@@ -471,8 +520,8 @@ def calculate_optimal_crf(
             predicted_ssim=effective_target,
         )
 
-    except Exception as e:
-        LOG.warning(f"Failed to calculate optimal CRF for {file_path}: {e}")
+    except (OSError, ValueError, RuntimeError) as e:
+        LOG.warning("Failed to calculate optimal CRF for %s: %s", file_path, e)
         return QualityDecision(
             effective_crf=23,
             effective_preset="medium",
@@ -519,12 +568,15 @@ def validate_quality_fast(original_path: Path, encoded_path: Path, sample_count:
                 continue
 
             # Ensure same size
-            if orig.shape != enc.shape:
-                enc = cv2.resize(enc, (orig.shape[1], orig.shape[0]))
+            enc_resized = cv2.resize(enc, (orig.shape[1], orig.shape[0])) if orig.shape != enc.shape else enc
 
             # Convert to grayscale and calculate real SSIM
-            orig_gray = cv2.cvtColor(orig, cv2.COLOR_BGR2GRAY) if len(orig.shape) == 3 else orig
-            enc_gray = cv2.cvtColor(enc, cv2.COLOR_BGR2GRAY) if len(enc.shape) == 3 else enc
+            orig_gray = cv2.cvtColor(orig, cv2.COLOR_BGR2GRAY) if len(orig.shape) == COLOR_CHANNELS else orig
+            enc_gray = (
+                cv2.cvtColor(enc_resized, cv2.COLOR_BGR2GRAY)
+                if len(enc_resized.shape) == COLOR_CHANNELS
+                else enc_resized
+            )
 
             # Normalize to 0-1
             orig_normalized = orig_gray.astype(np.float64) / 255.0
@@ -537,15 +589,16 @@ def validate_quality_fast(original_path: Path, encoded_path: Path, sample_count:
 
         return float(np.mean(ssim_scores)) if ssim_scores else 0.5
 
-    except Exception as e:
-        LOG.warning(f"Failed to validate quality between {original_path} and {encoded_path}: {e}")
+    except (OSError, ValueError, RuntimeError) as e:
+        LOG.warning("Failed to validate quality between %s and %s: %s", original_path, encoded_path, e)
         return 0.5
 
 
-def quick_test_encode(
+def quick_test_encode(  # noqa: PLR0913, PLR0915, C901, PLR0912
     file_path: Path,
     test_crf: int,
     test_duration: int = 30,
+    *,
     gpu: bool = False,
     codec: str = "libx265",
     speed_preset: str = "fast",
@@ -574,9 +627,9 @@ def quick_test_encode(
         if duration < test_duration:
             test_duration = max(5, int(duration * 0.2))  # Use 20% of video or 5s minimum
         # Further optimize test duration based on video length
-        elif duration <= 120:  # Short videos (<=2 min)
+        elif duration <= SHORT_VIDEO_DURATION:  # Short videos (<=2 min)
             test_duration = min(15, int(duration * 0.3))  # Up to 30% or 15s
-        elif duration <= 600:  # Medium videos (<=10 min)
+        elif duration <= MEDIUM_VIDEO_DURATION:  # Medium videos (<=10 min)
             test_duration = min(20, int(duration * 0.1))  # Up to 10% or 20s
         else:  # Long videos
             test_duration = min(25, int(duration * 0.05))  # Up to 5% or 25s
@@ -592,8 +645,30 @@ def quick_test_encode(
             encoded_path = Path(temp_encoded.name)
 
         try:
+            # Calculate dynamic timeout based on codec and preset
+            # AV1 with slower preset can take much longer
+            base_timeout = 60
+            if codec == "libaom-av1":
+                if speed_preset in ["veryslow", "slower"]:
+                    base_timeout = 600  # 10 minutes for very slow AV1
+                elif speed_preset in ["slow", "medium"]:
+                    base_timeout = 300  # 5 minutes for moderate AV1
+                else:
+                    base_timeout = 180  # 3 minutes for faster AV1
+            elif codec in ["libx265", "libhevc"]:
+                # 5 min for slow HEVC, 2 min for normal
+                base_timeout = 300 if speed_preset in ["veryslow", "slower", "slow"] else 120
+            elif codec in ["libvpx-vp9"]:
+                base_timeout = 240  # 4 minutes for VP9
+            else:
+                base_timeout = 120  # 2 minutes for other codecs
+
+            # Scale timeout based on test duration
+            timeout_multiplier = max(1.0, test_duration / 10.0)  # Scale for longer test segments
+            dynamic_timeout = int(base_timeout * timeout_multiplier)
+
             # Extract test segment
-            ffmpeg = FFmpegProcessor(timeout=60)
+            ffmpeg = FFmpegProcessor(timeout=dynamic_timeout)
 
             # For some codecs (like WMV3), copying to MP4 container fails
             # so we detect incompatible combinations and re-encode if needed
@@ -607,7 +682,7 @@ def quick_test_encode(
                 audio_codec = audio_info.get("codec", "").lower()
                 # WMV audio codecs that don't work with MP4
                 audio_incompatible = audio_codec in ["wmav1", "wmav2", "wma", "wmapro"]
-            except Exception:
+            except (OSError, ValueError, RuntimeError):
                 audio_incompatible = True  # Assume incompatible if we can't detect
 
             if needs_reencoding or audio_incompatible:
@@ -686,19 +761,19 @@ def quick_test_encode(
                 "source_fps": source_fps,
             }
 
-            LOG.debug(f"Unified test: {encode_time:.1f}s, {encoding_fps:.1f}fps, SSIM: {ssim_score:.3f}")
+            LOG.debug("Unified test: %.1fs, %.1ffps, SSIM: %.3f", encode_time, encoding_fps, ssim_score)
 
             # Clean up segment file
             segment_path.unlink(missing_ok=True)
-
-            return encoded_path, ssim_score, speed_metrics
 
         except Exception:
             # Clean up on error
             segment_path.unlink(missing_ok=True)
             encoded_path.unlink(missing_ok=True)
             raise
+        else:
+            return encoded_path, ssim_score, speed_metrics
 
-    except Exception as e:
-        LOG.warning(f"Quick test encode failed for {file_path}: {e}")
+    except (OSError, ValueError, RuntimeError) as e:
+        LOG.warning("Quick test encode failed for %s: %s", file_path, e)
         return None, 0.5, {"fps": 25.0, "processing_time_min": 10.0, "test_encode_time_sec": 0, "source_fps": 25.0}

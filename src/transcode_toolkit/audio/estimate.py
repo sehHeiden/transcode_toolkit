@@ -61,16 +61,15 @@ def _probe(path: Path) -> dict[str, Any]:
         "format=duration,bit_rate",
         str(path),
     ]
-    fmt = json.loads(
-        subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=True,
-            encoding="utf-8",
-            errors="replace",
-        ).stdout
-    )["format"]
+    # S603: subprocess call with shell=False is safe for hardcoded commands
+    result = subprocess.run(  # noqa: S603
+        cmd,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,  # Prevent hanging
+    )
+    fmt = json.loads(result.stdout)["format"]
     return {"duration": float(fmt.get("duration", 0)), "size": path.stat().st_size}
 
 
@@ -144,13 +143,8 @@ def analyse(root: Path, target_br: int) -> list[tuple[Path, int, int]]:
     return rows
 
 
-def compare_presets(root: Path) -> list[EstimationResult]:
-    """Compare all presets using optimized folder-level SNR sampling."""
-    # Consider splitting this function into smaller ones for better readability
-    config = get_config()
-    audio_exts = config.audio.extensions
-
-    # Group files by folders for SNR sampling
+def _group_files_by_folder(root: Path, audio_exts: list[str]) -> dict[Path, list[Path]]:
+    """Group audio files by their parent folder."""
     folder_groups: dict[Path, list[Path]] = {}
     for p in root.rglob("*"):
         if p.suffix.lower() in audio_exts:
@@ -158,90 +152,94 @@ def compare_presets(root: Path) -> list[EstimationResult]:
             if folder not in folder_groups:
                 folder_groups[folder] = []
             folder_groups[folder].append(p)
+    return folder_groups
 
-    sum(len(files) for files in folder_groups.values())
 
-    # Do folder-level SNR sampling - only probe sample files per folder
+def _create_folder_samples(folder_groups: dict[Path, list[Path]]) -> tuple[list[Path], dict[Path, float]]:
+    """Create sample files for SNR estimation from each folder."""
     sample_files = []
     folder_snr_cache = {}
-    MAX_SAMPLES_PER_FOLDER = 3
+    max_samples_per_folder = 3  # Maximum number of samples per folder for SNR estimation
 
     for folder, files in folder_groups.items():
         # Sample a few files from each folder for SNR estimation
         folder_samples = (
-            files[:MAX_SAMPLES_PER_FOLDER]
-            if len(files) <= MAX_SAMPLES_PER_FOLDER
-            else random.sample(files, MAX_SAMPLES_PER_FOLDER)
+            files[:max_samples_per_folder]
+            if len(files) <= max_samples_per_folder
+            else random.sample(files, max_samples_per_folder)
         )
         sample_files.extend(folder_samples)
 
         # Use default SNR for fast estimation
         folder_snr_cache[folder] = 65.0  # Conservative estimate for mixed content
 
-    # Get all metadata and bitrate info in a single FFprobe operation per file
-    def get_complete_file_info(file_path: Path) -> tuple[Path, dict[str, Any] | None, str | None]:
-        """Get both basic metadata and bitrate info in one FFprobe call."""
-        # Consider refactoring this function for clarity and maintainability
-        try:
-            # Use FFmpegProbe.get_audio_info which gets everything we need
-            audio_info = FFmpegProbe.get_audio_info(file_path)
-            return (
-                file_path,
-                {
-                    "duration": audio_info.get("duration", 0),
-                    "size": audio_info.get("size", file_path.stat().st_size),
-                    "bitrate": audio_info.get("bitrate"),
-                    "codec": audio_info.get("codec"),
-                },
-                None,
-            )  # No error
-        except FFmpegError as e:
-            # Capture the actual FFmpeg error message
-            error_msg = str(e)
+    return sample_files, folder_snr_cache
 
-            # Extract meaningful parts of the error message
-            if "No audio streams found" in error_msg:
-                reason = "No audio streams found"
-            elif "timed out" in error_msg.lower():
-                reason = "FFprobe timeout"
-            elif "Invalid JSON" in error_msg:
-                reason = "Invalid JSON response"
-            elif "ffprobe failed for" in error_msg:
-                # Extract the actual ffprobe stderr/stdout message
-                parts = error_msg.split(": ", 2)
-                if len(parts) >= FFPROBE_ERROR_PARTS_COUNT:
-                    actual_error = parts[2].strip()
-                    # Clean up common FFmpeg error patterns
-                    if actual_error:
-                        reason = actual_error[:100]  # Limit length but show actual error
-                    else:
-                        reason = f"FFprobe error (code {e.return_code})" if e.return_code else "FFprobe failed"
-                else:
-                    reason = f"FFprobe error (code {e.return_code})" if e.return_code else "FFprobe failed"
-            else:
-                # Show the actual error message, truncated if too long
-                reason = (
-                    error_msg[:ERROR_MESSAGE_TRUNCATE_LENGTH] + "..."
-                    if len(error_msg) > ERROR_MESSAGE_TRUNCATE_LENGTH
-                    else error_msg
-                )
-            return file_path, None, reason
-        except subprocess.CalledProcessError as e:
-            # Direct subprocess errors
-            reason = f"FFprobe subprocess error (code {e.returncode})"
-            return file_path, None, reason
-        except FileNotFoundError:
-            reason = "File not found"
-            return file_path, None, reason
-        except PermissionError:
-            reason = "Permission denied"
-            return file_path, None, reason
-        except Exception as e:
-            # Other unexpected errors
-            error_type = type(e).__name__
-            reason = f"{error_type}: {str(e)[:50]}..."
-            return file_path, None, reason
 
+def _get_complete_file_info(file_path: Path) -> tuple[Path, dict[str, Any] | None, str | None]:
+    """Get both basic metadata and bitrate info in one FFprobe call."""
+    try:
+        # Use FFmpegProbe.get_audio_info which gets everything we need
+        audio_info = FFmpegProbe.get_audio_info(file_path)
+        return (
+            file_path,
+            {
+                "duration": audio_info.get("duration", 0),
+                "size": audio_info.get("size", file_path.stat().st_size),
+                "bitrate": audio_info.get("bitrate"),
+                "codec": audio_info.get("codec"),
+            },
+            None,
+        )  # No error
+    except (FFmpegError, subprocess.CalledProcessError, FileNotFoundError, PermissionError, OSError) as e:
+        reason = _extract_error_reason(e)
+        return file_path, None, reason
+
+
+def _extract_error_reason(e: Exception) -> str:
+    """Extract meaningful error reason from exception."""
+    if isinstance(e, FFmpegError):
+        return _extract_ffmpeg_error_reason(e)
+    if isinstance(e, subprocess.CalledProcessError):
+        return f"FFprobe subprocess error (code {e.returncode})"
+    if isinstance(e, FileNotFoundError):
+        return "File not found"
+    if isinstance(e, PermissionError):
+        return "Permission denied"
+    if isinstance(e, OSError):
+        error_type = type(e).__name__
+        return f"{error_type}: {str(e)[:50]}..."
+    return "Unknown error"
+
+
+def _extract_ffmpeg_error_reason(e: FFmpegError) -> str:
+    """Extract meaningful error reason from FFmpegError."""
+    error_msg = str(e)
+    if "No audio streams found" in error_msg:
+        return "No audio streams found"
+    if "timed out" in error_msg.lower():
+        return "FFprobe timeout"
+    if "Invalid JSON" in error_msg:
+        return "Invalid JSON response"
+    if "ffprobe failed for" in error_msg:
+        return _extract_ffprobe_error_details(error_msg, e)
+    if len(error_msg) > ERROR_MESSAGE_TRUNCATE_LENGTH:
+        return error_msg[:ERROR_MESSAGE_TRUNCATE_LENGTH] + "..."
+    return error_msg
+
+
+def _extract_ffprobe_error_details(error_msg: str, e: FFmpegError) -> str:
+    """Extract detailed error information from ffprobe error message."""
+    parts = error_msg.split(": ", 2)
+    if len(parts) >= FFPROBE_ERROR_PARTS_COUNT:
+        actual_error = parts[2].strip()
+        if actual_error:
+            return actual_error[:100]
+    return f"FFprobe error (code {e.return_code})" if e.return_code else "FFprobe failed"
+
+
+def _process_file_metadata(sample_files: list[Path]) -> tuple[dict[Path, dict[str, Any]], list[tuple[Path, str]]]:
+    """Process file metadata for sample files."""
     # Use more conservative worker count for better performance
     max_workers = max(
         1, min(8, psutil.cpu_count(logical=False) or 1, len(sample_files))
@@ -259,7 +257,7 @@ def compare_presets(root: Path) -> list[EstimationResult]:
     try:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_file = {
-                executor.submit(get_complete_file_info, file_path): file_path for file_path in sample_files
+                executor.submit(_get_complete_file_info, file_path): file_path for file_path in sample_files
             }
             for future in tqdm(as_completed(future_to_file), total=len(future_to_file), desc="Analyzing Audio Files"):
                 file_path = future_to_file[future]
@@ -272,10 +270,10 @@ def compare_presets(root: Path) -> list[EstimationResult]:
                         else:
                             failed_files.append((file_path, error_reason or "Unknown error"))
                     else:  # Legacy format - shouldn't happen but handle gracefully
-                        LOG.warning(f"Unexpected result format from {file_path}: {result}")
+                        LOG.warning("Unexpected result format from %s: %s", file_path, result)
                         failed_files.append((file_path, "Unexpected result format"))
-                except Exception as exc:
-                    # Suppress individual warnings during processing, but track reason
+                except (OSError, ValueError) as exc:
+                    # Handle specific exceptions during processing
                     reason = str(exc).split(":")[0] if ":" in str(exc) else str(exc)[:50]
                     failed_files.append((file_path, reason))
                     continue
@@ -290,10 +288,18 @@ def compare_presets(root: Path) -> list[EstimationResult]:
         reasons = Counter(reason for _, reason in failed_files)
         most_common = reasons.most_common(3)  # Show top 3 reasons
 
-        for reason, _count in most_common:
+        for _reason, _count in most_common:
             pass
 
-    # Combine all the information - extrapolate sample data to all files
+    return file_metadata, failed_files
+
+
+def _create_files_with_cache(
+    folder_groups: dict[Path, list[Path]],
+    folder_snr_cache: dict[Path, float],
+    file_metadata: dict[Path, dict[str, Any]],
+) -> list[tuple[Path, dict[str, Any]]]:
+    """Create files with cached metadata for all files in folder groups."""
     files_with_cache = []
     for folder, files in folder_groups.items():
         folder_snr = folder_snr_cache[folder]
@@ -337,6 +343,22 @@ def compare_presets(root: Path) -> list[EstimationResult]:
                     "codec": representative_codec,
                 }
             files_with_cache.append((file_path, cache))
+
+    return files_with_cache
+
+
+def compare_presets(root: Path) -> list[EstimationResult]:
+    """Compare all presets using optimized folder-level SNR sampling."""
+    config = get_config()
+    audio_exts = config.audio.extensions
+
+    folder_groups = _group_files_by_folder(root, audio_exts)
+    sample_files, folder_snr_cache = _create_folder_samples(folder_groups)
+
+    file_metadata, failed_files = _process_file_metadata(sample_files)
+
+    # Combine all the information - extrapolate sample data to all files
+    files_with_cache = _create_files_with_cache(folder_groups, folder_snr_cache, file_metadata)
 
     # Calculate estimates for each preset using cached data
     results = []
@@ -407,7 +429,8 @@ def print_comparison(results: list[EstimationResult], recommended: str) -> None:
         star = " ★" if result.preset == recommended else "  "
 
         print(
-            f"{result.preset:<15}{star} {current_mb:>7.1f} MB {estimated_mb:>7.1f} MB {saving_mb:>7.1f} MB {result.saving_percent:>6.1f}%"
+            f"{result.preset:<15}{star} {current_mb:>7.1f} MB {estimated_mb:>7.1f} MB "
+            f"{saving_mb:>7.1f} MB {result.saving_percent:>6.1f}%"
         )
 
     print("-" * 60)
@@ -465,8 +488,7 @@ def cli(
     path: Path,
     *,
     preset: str | None = None,
-    csv_path: str | None = None,
-    json_path: str | None = None,
+    output_paths: tuple[str | None, str | None] = (None, None),
     verbose: bool = False,
     compare: bool = False,
 ) -> None:
@@ -476,12 +498,12 @@ def cli(
     Args:
         path: Directory to analyze
         preset: Specific preset to analyze (if None, compares all)
-        csv_path: Path to save CSV report
-        json_path: Path to save JSON report
+        output_paths: Tuple of (csv_path, json_path) for output
         verbose: Enable verbose logging
         compare: Force comparison mode even if preset is specified
 
     """
+    csv_path, json_path = output_paths
     logging.basicConfig(level=logging.INFO if verbose else logging.WARNING)
 
     # Check if required executables are available

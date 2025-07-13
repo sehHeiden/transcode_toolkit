@@ -46,6 +46,15 @@ class ProcessingError(Exception):
         file_path: Path | None = None,
         cause: Exception | None = None,
     ) -> None:
+        """
+        Initialize processing error.
+
+        Args:
+            message: Error message
+            file_path: Path to the file being processed
+            cause: Original exception that caused this error
+
+        """
         super().__init__(message)
         self.file_path = file_path
         self.cause = cause
@@ -55,6 +64,13 @@ class MediaProcessor(ABC):
     """Abstract base class for media processors."""
 
     def __init__(self, name: str) -> None:
+        """
+        Initialize media processor.
+
+        Args:
+            name: Name of the processor
+
+        """
         self.name = name
         self.logger = logging.getLogger(f"{self.__class__.__module__}.{self.__class__.__name__}")
 
@@ -63,14 +79,14 @@ class MediaProcessor(ABC):
         """Check if this processor can handle the given file."""
 
     @abstractmethod
-    def should_process(self, file_path: Path, **kwargs) -> bool:
+    def should_process(self, file_path: Path, **kwargs: object) -> bool:
         """Check if the file should be processed (not already optimized)."""
 
     @abstractmethod
-    def process_file(self, file_path: Path, **kwargs) -> ProcessingResult:
+    def process_file(self, file_path: Path, **kwargs: object) -> ProcessingResult:
         """Process a single file."""
 
-    def process_directory(self, directory: Path, recursive: bool = True, **kwargs) -> list[ProcessingResult]:
+    def process_directory(self, directory: Path, *, recursive: bool = True, **kwargs: object) -> list[ProcessingResult]:
         """Process all compatible files in a directory."""
         results = []
 
@@ -81,7 +97,7 @@ class MediaProcessor(ABC):
         pattern = "**/*" if recursive else "*"
         files = [f for f in directory.glob(pattern) if f.is_file() and self.can_process(f)]
 
-        self.logger.info(f"Found {len(files)} files to process in {directory}")
+        self.logger.info("Found %d files to process in %s", len(files), directory)
 
         for file_path in files:
             try:
@@ -97,7 +113,7 @@ class MediaProcessor(ABC):
                         )
                     )
             except Exception as e:
-                self.logger.exception(f"Error processing {file_path}: {e}")
+                self.logger.exception("Error processing %s", file_path)
                 results.append(
                     ProcessingResult(
                         source_file=file_path,

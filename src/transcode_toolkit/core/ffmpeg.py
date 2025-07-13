@@ -7,7 +7,7 @@ import logging
 import shutil
 import subprocess
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from .base import ProcessingError
 
@@ -16,6 +16,22 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 LOG = logging.getLogger(__name__)
+
+# SNR estimation constants
+MP3_HIGH_QUALITY_BITRATE = 320000
+MP3_GOOD_QUALITY_BITRATE = 192000
+MP3_STANDARD_QUALITY_BITRATE = 128000
+AAC_HIGH_QUALITY_BITRATE = 256000
+AAC_GOOD_QUALITY_BITRATE = 128000
+AAC_STANDARD_QUALITY_BITRATE = 96000
+OPUS_HIGH_QUALITY_BITRATE = 192000
+OPUS_GOOD_QUALITY_BITRATE = 128000
+OPUS_STANDARD_QUALITY_BITRATE = 96000
+WMA_HIGH_QUALITY_BITRATE = 192000
+WMA_GOOD_QUALITY_BITRATE = 128000
+UNKNOWN_HIGH_QUALITY_BITRATE = 256000
+UNKNOWN_GOOD_QUALITY_BITRATE = 128000
+ENCODERS_LIST_MINIMUM_PARTS = 2
 
 
 def _parse_frame_rate(frame_rate_str: str) -> float:
@@ -35,24 +51,24 @@ class FFmpegError(ProcessingError):
     def __init__(
         self,
         message: str,
+        *,
         command: list[str] | None = None,
         return_code: int | None = None,
         stderr: str | None = None,
-        stdout: str | None = None,
-        **kwargs,
+        file_path: Path | None = None,
     ) -> None:
-        super().__init__(message, **kwargs)
+        """Initialize FFmpeg error with detailed context."""
+        super().__init__(message, file_path=file_path)
         self.command = command
         self.return_code = return_code
         self.stderr = stderr
-        self.stdout = stdout
 
 
 class FFmpegProbe:
     """FFmpeg probe utility for media file analysis with intelligent caching."""
 
     # OPTIMIZATION: Class-level cache for probe results
-    _probe_cache: dict[tuple[Path, float, str], dict[str, Any]] = {}
+    _probe_cache: ClassVar[dict[tuple[Path, float, str], dict[str, Any]]] = {}
 
     @staticmethod
     def check_availability() -> None:
@@ -71,10 +87,11 @@ class FFmpegProbe:
         try:
             mtime = file_path.stat().st_mtime
             stream_key = stream_type or "all"
-            return (file_path, mtime, stream_key)
         except OSError:
             # File doesn't exist or other error - return uncacheable key
             return (file_path, -1.0, stream_type or "all")
+        else:
+            return (file_path, mtime, stream_key)
 
     @classmethod
     def probe_media(cls, file_path: Path, stream_type: str | None = None) -> dict[str, Any]:
@@ -102,7 +119,7 @@ class FFmpegProbe:
         cmd.append(str(file_path))
 
         try:
-            result = subprocess.run(
+            result = subprocess.run(  # noqa: S603
                 cmd,
                 capture_output=True,
                 text=True,
@@ -117,8 +134,6 @@ class FFmpegProbe:
             # OPTIMIZATION: Cache result if valid
             if cache_key[1] >= 0:
                 cls._probe_cache[cache_key] = probe_data
-
-            return probe_data
         except subprocess.CalledProcessError as e:
             # Capture both stderr and stdout for detailed error info
             error_details = e.stderr or e.stdout or "No error output"
@@ -129,18 +144,19 @@ class FFmpegProbe:
                 return_code=e.returncode,
                 file_path=file_path,
                 stderr=e.stderr,
-                stdout=e.stdout,
-            )
-        except subprocess.TimeoutExpired:
+            ) from e
+        except subprocess.TimeoutExpired as e:
             msg = f"ffprobe timed out for {file_path}"
-            raise FFmpegError(msg, command=cmd, file_path=file_path)
+            raise FFmpegError(msg, command=cmd, file_path=file_path) from e
         except json.JSONDecodeError as e:
             msg = f"Invalid JSON from ffprobe for {file_path}: {e}"
             raise FFmpegError(
                 msg,
                 command=cmd,
                 file_path=file_path,
-            )
+            ) from e
+        else:
+            return probe_data
 
     @staticmethod
     def get_audio_info(file_path: Path) -> dict[str, Any]:
@@ -164,6 +180,69 @@ class FFmpegProbe:
         }
 
     @staticmethod
+    def _normalize_bitrate(bitrate: str | int | None) -> int | None:
+        """Convert bitrate to int if it's a string."""
+        if bitrate is None:
+            return None
+        if isinstance(bitrate, str):
+            try:
+                return int(bitrate)
+            except ValueError:
+                return None
+        return int(bitrate)
+
+    @staticmethod
+    def _get_snr_for_mp3(bitrate: int | None) -> float:
+        """Get SNR for MP3 codec."""
+        if bitrate and bitrate >= MP3_HIGH_QUALITY_BITRATE:
+            return 85.0
+        if bitrate and bitrate >= MP3_GOOD_QUALITY_BITRATE:
+            return 75.0
+        if bitrate and bitrate >= MP3_STANDARD_QUALITY_BITRATE:
+            return 65.0
+        return 55.0
+
+    @staticmethod
+    def _get_snr_for_aac(bitrate: int | None) -> float:
+        """Get SNR for AAC codec."""
+        if bitrate and bitrate >= AAC_HIGH_QUALITY_BITRATE:
+            return 80.0
+        if bitrate and bitrate >= AAC_GOOD_QUALITY_BITRATE:
+            return 70.0
+        if bitrate and bitrate >= AAC_STANDARD_QUALITY_BITRATE:
+            return 60.0
+        return 50.0
+
+    @staticmethod
+    def _get_snr_for_opus(bitrate: int | None) -> float:
+        """Get SNR for Opus/Ogg codec."""
+        if bitrate and bitrate >= OPUS_HIGH_QUALITY_BITRATE:
+            return 85.0
+        if bitrate and bitrate >= OPUS_GOOD_QUALITY_BITRATE:
+            return 75.0
+        if bitrate and bitrate >= OPUS_STANDARD_QUALITY_BITRATE:
+            return 65.0
+        return 55.0
+
+    @staticmethod
+    def _get_snr_for_wma(bitrate: int | None) -> float:
+        """Get SNR for WMA codec."""
+        if bitrate and bitrate >= WMA_HIGH_QUALITY_BITRATE:
+            return 75.0
+        if bitrate and bitrate >= WMA_GOOD_QUALITY_BITRATE:
+            return 65.0
+        return 55.0
+
+    @staticmethod
+    def _get_snr_for_unknown(bitrate: int | None) -> float:
+        """Get SNR for unknown codec."""
+        if bitrate and bitrate >= UNKNOWN_HIGH_QUALITY_BITRATE:
+            return 70.0
+        if bitrate and bitrate >= UNKNOWN_GOOD_QUALITY_BITRATE:
+            return 60.0
+        return 50.0
+
+    @staticmethod
     def estimate_snr(file_path: Path, audio_info: dict[str, Any] | None = None) -> float:
         """
         Estimate Signal-to-Noise Ratio based on codec and bitrate.
@@ -179,63 +258,36 @@ class FFmpegProbe:
         if audio_info is None:
             try:
                 audio_info = FFmpegProbe.get_audio_info(file_path)
-            except Exception as e:
-                LOG.warning(f"Failed to get audio info for {file_path}: {e}")
+            except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as e:
+                LOG.warning("Failed to get audio info for %s: %s", file_path, e)
                 return 60.0  # Conservative default
 
         codec = audio_info.get("codec", "").lower()
-        bitrate = audio_info.get("bitrate")
+        bitrate = FFmpegProbe._normalize_bitrate(audio_info.get("bitrate"))
 
-        # Convert bitrate to int if it's a string
-        if bitrate and isinstance(bitrate, str):
-            try:
-                bitrate = int(bitrate)
-            except ValueError:
-                bitrate = None
-        elif bitrate:
-            bitrate = int(bitrate)
+        # Use codec mapping to reduce return statements
+        codec_map = {
+            # Lossless codecs
+            "flac": lambda _: 96.0,  # 16-bit lossless theoretical maximum
+            "alac": lambda _: 96.0,
+            "wav": lambda _: 96.0,
+            "aiff": lambda _: 96.0,
+            "dsd": lambda _: 120.0,  # DSD has very high SNR
+            "dsf": lambda _: 120.0,
+            "dff": lambda _: 120.0,
+            # Lossy codecs
+            "mp3": FFmpegProbe._get_snr_for_mp3,
+            "aac": FFmpegProbe._get_snr_for_aac,
+            "m4a": FFmpegProbe._get_snr_for_aac,
+            "opus": FFmpegProbe._get_snr_for_opus,
+            "ogg": FFmpegProbe._get_snr_for_opus,
+            "vorbis": FFmpegProbe._get_snr_for_opus,
+            "wma": FFmpegProbe._get_snr_for_wma,
+            "wmv": FFmpegProbe._get_snr_for_wma,
+        }
 
-        # Estimate SNR based on codec and bitrate
-        if codec in ["flac", "alac", "wav", "aiff"]:
-            return 96.0  # 16-bit lossless theoretical maximum
-        if codec in ["dsd", "dsf", "dff"]:
-            return 120.0  # DSD has very high SNR
-        if codec == "mp3":
-            if bitrate and bitrate >= 320000:
-                return 85.0  # High quality MP3
-            if bitrate and bitrate >= 192000:
-                return 75.0  # Good quality MP3
-            if bitrate and bitrate >= 128000:
-                return 65.0  # Standard quality MP3
-            return 55.0  # Lower quality MP3
-        if codec in ["aac", "m4a"]:
-            if bitrate and bitrate >= 256000:
-                return 80.0  # High quality AAC
-            if bitrate and bitrate >= 128000:
-                return 70.0  # Good quality AAC
-            if bitrate and bitrate >= 96000:
-                return 60.0  # Standard quality AAC
-            return 50.0  # Lower quality AAC
-        if codec in ["opus", "ogg", "vorbis"]:
-            if bitrate and bitrate >= 192000:
-                return 85.0  # High quality Opus/Ogg
-            if bitrate and bitrate >= 128000:
-                return 75.0  # Good quality Opus/Ogg
-            if bitrate and bitrate >= 96000:
-                return 65.0  # Standard quality Opus/Ogg
-            return 55.0  # Lower quality Opus/Ogg
-        if codec in ["wma", "wmv"]:
-            if bitrate and bitrate >= 192000:
-                return 75.0  # High quality WMA
-            if bitrate and bitrate >= 128000:
-                return 65.0  # Good quality WMA
-            return 55.0  # Lower quality WMA
-        # Unknown codec - conservative estimate
-        if bitrate and bitrate >= 256000:
-            return 70.0
-        if bitrate and bitrate >= 128000:
-            return 60.0
-        return 50.0
+        estimator = codec_map.get(codec, FFmpegProbe._get_snr_for_unknown)
+        return estimator(bitrate)
 
     @staticmethod
     def get_video_info(file_path: Path) -> dict[str, Any]:
@@ -264,6 +316,7 @@ class FFmpegProcessor:
     """FFmpeg command executor with enhanced error handling."""
 
     def __init__(self, timeout: int = 300) -> None:
+        """Initialize FFmpeg processor with timeout."""
         self.timeout = timeout
         self._available_encoders: dict[str, bool] | None = None
 
@@ -273,8 +326,8 @@ class FFmpegProcessor:
             return self._available_encoders
 
         try:
-            result = subprocess.run(
-                ["ffmpeg", "-encoders"],
+            result = subprocess.run(  # noqa: S603
+                ["ffmpeg", "-encoders"],  # noqa: S607
                 capture_output=True,
                 text=True,
                 check=True,
@@ -288,16 +341,14 @@ class FFmpegProcessor:
                 # Look for encoder lines (they start with " V" for video or " A" for audio)
                 if line.startswith((" V", " A")):  # Video or Audio encoder
                     parts = line.split()
-                    if len(parts) >= 2:
+                    if len(parts) >= ENCODERS_LIST_MINIMUM_PARTS:
                         encoder_name = parts[1]
                         encoders[encoder_name] = True
 
             self._available_encoders = encoders
-            LOG.debug(f"Found {len(encoders)} available encoders")
-            return encoders
-
-        except Exception as e:
-            LOG.warning(f"Failed to get encoder list: {e}")
+            LOG.debug("Found %d available encoders", len(encoders))
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
+            LOG.warning("Failed to get encoder list: %s", e)
             # Fallback: assume common encoders are available
             self._available_encoders = {
                 "libx264": True,
@@ -310,7 +361,10 @@ class FFmpegProcessor:
                 "h264_qsv": False,
                 "hevc_qsv": False,
             }
-            return self._available_encoders
+        else:
+            return encoders
+
+        return self._available_encoders
 
     def is_encoder_available(self, encoder: str) -> bool:
         """Check if a specific encoder is available."""
@@ -326,6 +380,16 @@ class FFmpegProcessor:
             return self._test_gpu_encoder(codec)
 
         return True, ""
+
+    def _get_gpu_error_message(self, codec: str) -> str:
+        """Get appropriate error message for GPU encoder."""
+        if codec in ["h264_nvenc", "hevc_nvenc"]:
+            return "NVIDIA GPU encoder not available (no compatible GPU or drivers)"
+        if codec in ["h264_amf", "hevc_amf"]:
+            return "AMD GPU encoder not available (no compatible GPU or drivers)"
+        if codec in ["h264_qsv", "hevc_qsv"]:
+            return "Intel QuickSync encoder not available (no compatible GPU or drivers)"
+        return f"GPU encoder '{codec}' failed hardware test"
 
     def _test_gpu_encoder(self, codec: str) -> tuple[bool, str]:
         """Test if GPU encoder actually works by doing a quick encode test."""
@@ -347,7 +411,7 @@ class FFmpegProcessor:
                 "-",
             ]
 
-            result = subprocess.run(
+            result = subprocess.run(  # noqa: S603
                 test_cmd,
                 capture_output=True,
                 text=True,
@@ -359,41 +423,27 @@ class FFmpegProcessor:
 
             if result.returncode == 0:
                 return True, ""
-            # Parse error message for specific hardware issues
-            result.stderr.lower()
-            if codec in ["h264_nvenc", "hevc_nvenc"]:
-                return False, "NVIDIA GPU encoder not available (no compatible GPU or drivers)"
-            if codec in ["h264_amf", "hevc_amf"]:
-                return False, "AMD GPU encoder not available (no compatible GPU or drivers)"
-            if codec in ["h264_qsv", "hevc_qsv"]:
-                return False, "Intel QuickSync encoder not available (no compatible GPU or drivers)"
-            return False, f"GPU encoder '{codec}' failed hardware test"
-
-        except Exception as e:
-            LOG.debug(f"GPU encoder test failed for {codec}: {e}")
-            if codec in ["h264_nvenc", "hevc_nvenc"]:
-                return False, "NVIDIA GPU encoder not available (no compatible GPU or drivers)"
-            if codec in ["h264_amf", "hevc_amf"]:
-                return False, "AMD GPU encoder not available (no compatible GPU or drivers)"
-            if codec in ["h264_qsv", "hevc_qsv"]:
-                return False, "Intel QuickSync encoder not available (no compatible GPU or drivers)"
-            return False, f"GPU encoder '{codec}' test failed: {e}"
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
+            LOG.debug("GPU encoder test failed for %s: %s", codec, e)
+            return False, self._get_gpu_error_message(codec)
+        else:
+            return False, self._get_gpu_error_message(codec)
 
     def run_command(
         self,
         command: list[str],
         file_path: Path | None = None,
-        progress_callback: Callable | None = None,
+        _progress_callback: Callable | None = None,
     ) -> subprocess.CompletedProcess:
         """Run FFmpeg command with proper error handling."""
         FFmpegProbe.check_availability()
 
-        LOG.info(f"Running FFmpeg command: {' '.join(command)}")
+        LOG.info("Running FFmpeg command: %s", " ".join(command))
         start_time = time.time()
 
         try:
             # Use stderr=subprocess.PIPE to capture progress info if needed
-            result = subprocess.run(
+            result = subprocess.run(  # noqa: S603
                 command,
                 capture_output=True,
                 text=True,
@@ -404,29 +454,17 @@ class FFmpegProcessor:
             )
 
             processing_time = time.time() - start_time
-            LOG.debug(f"FFmpeg command completed in {processing_time:.2f}s")
+            LOG.debug("FFmpeg command completed in %.2fs", processing_time)
 
             if result.returncode != 0:
-                error_msg = f"FFmpeg failed with return code {result.returncode}"
-                if result.stderr:
-                    error_msg += f": {result.stderr.strip()}"
-
-                raise FFmpegError(
-                    error_msg,
-                    command=command,
-                    return_code=result.returncode,
-                    file_path=file_path,
-                )
-
-            return result
-
-        except subprocess.TimeoutExpired:
+                self._handle_ffmpeg_error(result, command, file_path)
+        except subprocess.TimeoutExpired as e:
             msg = f"FFmpeg command timed out after {self.timeout}s"
             raise FFmpegError(
                 msg,
                 command=command,
                 file_path=file_path,
-            )
+            ) from e
         except Exception as e:
             if isinstance(e, FFmpegError):
                 raise
@@ -435,8 +473,24 @@ class FFmpegProcessor:
                 msg,
                 command=command,
                 file_path=file_path,
-                cause=e,
-            )
+            ) from e
+        else:
+            return result
+
+    def _handle_ffmpeg_error(
+        self, result: subprocess.CompletedProcess, command: list[str], file_path: Path | None
+    ) -> None:
+        """Handle FFmpeg command error by raising appropriate exception."""
+        error_msg = f"FFmpeg failed with return code {result.returncode}"
+        if result.stderr:
+            error_msg += f": {result.stderr.strip()}"
+
+        raise FFmpegError(
+            error_msg,
+            command=command,
+            return_code=result.returncode,
+            file_path=file_path,
+        )
 
     def build_audio_command(
         self,
@@ -444,7 +498,7 @@ class FFmpegProcessor:
         output_file: Path,
         codec: str = "libopus",
         bitrate: str = "128k",
-        **kwargs,
+        **kwargs: object,
     ) -> list[str]:
         """Build FFmpeg command for audio transcoding."""
         cmd = [
@@ -460,28 +514,28 @@ class FFmpegProcessor:
 
         # Add additional audio parameters
         if "application" in kwargs and kwargs["application"] is not None:
-            cmd.extend(["-application", kwargs["application"]])
+            cmd.extend(["-application", str(kwargs["application"])])
         if "cutoff" in kwargs and kwargs["cutoff"] is not None:
-            cmd.extend(["-cutoff", kwargs["cutoff"]])
+            cmd.extend(["-cutoff", str(kwargs["cutoff"])])
         if "channels" in kwargs and kwargs["channels"] is not None:
             cmd.extend(["-ac", str(kwargs["channels"])])
         if "vbr" in kwargs and kwargs["vbr"] is not None:
-            cmd.extend(["-vbr", kwargs["vbr"]])
+            cmd.extend(["-vbr", str(kwargs["vbr"])])
         if "compression_level" in kwargs and kwargs["compression_level"] is not None:
             cmd.extend(["-compression_level", str(kwargs["compression_level"])])
 
         cmd.append(str(output_file))
         return cmd
 
-    def build_video_command(
+    def build_video_command(  # noqa: PLR0913
         self,
         input_file: Path,
         output_file: Path,
         codec: str = "libx265",
         crf: int = 24,
         preset: str = "medium",
-        preset_config=None,  # VideoPreset configuration object
-        **kwargs,
+        preset_config: object = None,  # VideoPreset configuration object
+        **kwargs: object,
     ) -> list[str]:
         """Build FFmpeg command for video transcoding."""
         cmd = [
@@ -506,7 +560,7 @@ class FFmpegProcessor:
 
             # For GPU encoders, map CPU FFmpeg presets to GPU equivalents
             # First get the actual FFmpeg preset from config if available
-            ffmpeg_preset = preset_config.preset if preset_config else preset
+            ffmpeg_preset = getattr(preset_config, "preset", preset) if preset_config else preset
 
             # Map CPU presets to GPU presets
             gpu_preset_map = {
@@ -540,8 +594,8 @@ class FFmpegProcessor:
                 cmd.extend(["-c:v", gpu_codec, "-preset", gpu_preset, "-crf", str(crf)])
         else:
             # For CPU encoders, use the actual FFmpeg preset from config, not the preset name
-            ffmpeg_preset = preset_config.preset if preset_config else preset
-            cmd.extend(["-c:v", codec, "-preset", ffmpeg_preset])
+            ffmpeg_preset = getattr(preset_config, "preset", preset) if preset_config else preset
+            cmd.extend(["-c:v", codec, "-preset", str(ffmpeg_preset)])
 
             # Handle different codec quality parameters
             if codec == "libx265":
@@ -557,7 +611,7 @@ class FFmpegProcessor:
                 cmd.extend(["-crf", str(crf)])
 
         # Audio handling (usually copy)
-        cmd.extend(["-c:a", kwargs.get("audio_codec", "copy")])
+        cmd.extend(["-c:a", str(kwargs.get("audio_codec", "copy"))])
 
         cmd.append(str(output_file))
         return cmd

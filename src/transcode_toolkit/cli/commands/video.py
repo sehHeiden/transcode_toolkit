@@ -53,14 +53,14 @@ class VideoCommands:
                     working_presets.append(preset_name)
                 else:
                     filtered_codecs.add(f"{codec} ({error_msg})")
-                    LOG.debug(f"Filtering preset '{preset_name}': {error_msg}")
+                    LOG.debug("Filtering preset '%s': %s", preset_name, error_msg)
 
-            except Exception as e:
-                LOG.warning(f"Error checking preset '{preset_name}': {e}")
+            except (OSError, ValueError) as e:
+                LOG.warning("Error checking preset '%s': %s", preset_name, e)
 
         # Log filtered codecs for user information
         if filtered_codecs:
-            LOG.info(f"Filtered out presets using unavailable codecs: {', '.join(sorted(filtered_codecs))}")
+            LOG.info("Filtered out presets using unavailable codecs: %s", ", ".join(sorted(filtered_codecs)))
 
         # Ensure "default" is first if it's available
         if "default" in working_presets:
@@ -68,8 +68,13 @@ class VideoCommands:
             working_presets.insert(0, "default")
 
         self._working_presets_cache = working_presets
-        LOG.info(f"Available presets after codec filtering: {len(working_presets)} out of {len(all_presets)} total")
-        LOG.debug(f"Working presets: {', '.join(working_presets[:10])}{'...' if len(working_presets) > 10 else ''}")
+        LOG.info("Available presets after codec filtering: %d out of %d total", len(working_presets), len(all_presets))
+        presets_limit = 10  # Maximum number of presets to display
+        LOG.debug(
+            "Working presets: %s%s",
+            ", ".join(working_presets[:presets_limit]),
+            "..." if len(working_presets) > presets_limit else "",
+        )
         return working_presets
 
     def add_subcommands(self, parser: argparse.ArgumentParser) -> None:
@@ -146,9 +151,9 @@ class VideoCommands:
             # Validate codec availability (this should rarely fail since we filter presets)
             is_available, error_msg = ffmpeg.validate_codec(codec_to_check)
             if not is_available:
-                LOG.error(f"Cannot use preset '{preset_name}': {error_msg}")
+                LOG.error("Cannot use preset '%s': %s", preset_name, error_msg)
                 working_presets = self._get_working_presets()
-                LOG.info(f"Available presets on your system: {', '.join(working_presets)}")
+                LOG.info("Available presets on your system: %s", ", ".join(working_presets))
                 return 1
 
             processor = VideoProcessor(self.config_manager)
@@ -183,7 +188,7 @@ class VideoCommands:
                     args.path, preset=preset_str, gpu=gpu_bool, force_crf=force_crf_int, force_preset=force_preset_str
                 )
                 if result.status.value == "success":
-                    LOG.info(f"Successfully processed {args.path} with preset '{preset_name}'")
+                    LOG.info("Successfully processed %s with preset '%s'", args.path, preset_name)
                     return 0
                 LOG.error("Failed to process %s: %s", args.path, result.message)
                 return 1
@@ -193,9 +198,8 @@ class VideoCommands:
             )
             successful = [r for r in results if r.status.value == "success"]
             failed = [r for r in results if r.status.value == "error"]
-            skipped = [r for r in results if r.status.value == "skipped"]
 
-            LOG.info(f"Processed {len(successful)}/{len(results)} files successfully with preset '{preset_name}'")
+            LOG.info("Processed %d/%d files successfully with preset '%s'", len(successful), len(results), preset_name)
 
             # Show failure table if there are failures
             if failed:
@@ -225,8 +229,9 @@ class VideoCommands:
 
             analyses, optimal_presets = analyze_directory(args.path, save_settings=save_settings)
             print_detailed_summary(analyses, optimal_presets, csv_path=csv_path)
-            return 0
 
-        except Exception:
+        except (OSError, ValueError):
             LOG.exception("Video estimation failed")
             return 1
+        else:
+            return 0

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING, Any
@@ -26,11 +27,14 @@ from ..core.directory_processor import process_directory_unified
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from ..config.settings import AudioPreset
+
 
 class AudioProcessor(MediaProcessor):
     """Audio transcoding processor using Opus codec."""
 
     def __init__(self, config_manager: ConfigManager) -> None:
+        """Initialize audio processor with config manager."""
         super().__init__("AudioProcessor")
         self.config_manager = config_manager
         self.ffmpeg = FFmpegProcessor()
@@ -44,12 +48,21 @@ class AudioProcessor(MediaProcessor):
     def can_process(self, file_path: Path) -> bool:
         """Check if file is a supported audio format."""
         audio_extensions = self.config_manager.get_value("audio.extensions", set())
+        if not isinstance(audio_extensions, set):
+            try:
+                # Check if it's iterable before converting to set
+                if hasattr(audio_extensions, "__iter__") and not isinstance(audio_extensions, (str, bytes)):
+                    audio_extensions = set(audio_extensions)
+                else:
+                    audio_extensions = set()
+            except (TypeError, ValueError):
+                audio_extensions = set()
         return file_path.suffix.lower() in audio_extensions
 
-    def should_process(self, file_path: Path, **kwargs) -> bool:
+    def should_process(self, file_path: Path, **kwargs: object) -> bool:
         """Check if file should be processed (not already optimized)."""
         try:
-            preset = kwargs.get("preset", "music")
+            preset = str(kwargs.get("preset", "music"))
             audio_info = FFmpegProbe.get_audio_info(file_path)
             preset_config = self.config_manager.config.get_audio_preset(preset)
 
@@ -61,29 +74,36 @@ class AudioProcessor(MediaProcessor):
                     # Allow reprocessing if current bitrate is significantly higher
                     if current_bps > target_bps * 1.2:  # 20% tolerance for Opus→Opus
                         self.logger.info(
-                            f"Will reprocess {file_path.name}: Opus {current_bps / 1000:.0f}k → {target_bps / 1000:.0f}k"
+                            "Will reprocess %s: Opus %.0fk → %.0fk",
+                            file_path.name,
+                            current_bps / 1000,
+                            target_bps / 1000,
                         )
                         return True
                     self.logger.info(
-                        f"Skipping {file_path.name}: Already optimal Opus ({current_bps / 1000:.0f}k vs target {target_bps / 1000:.0f}k)"
+                        "Skipping %s: Already optimal Opus (%.0fk vs target %.0fk)",
+                        file_path.name,
+                        current_bps / 1000,
+                        target_bps / 1000,
                     )
                     return False
                 # If bitrate is unknown, conservatively skip
-                self.logger.info(f"Skipping {file_path.name}: Already Opus format (bitrate unknown)")
+                self.logger.info("Skipping %s: Already Opus format (bitrate unknown)", file_path.name)
                 return False
 
+        except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as e:
+            self.logger.warning("Could not analyze %s: %s", file_path, e)
+            return False
+        else:
             return True
 
-        except Exception as e:
-            self.logger.warning(f"Could not analyze {file_path}: {e}")
-            return False
-
-    def process_file(self, file_path: Path, preset: str = "music", **kwargs) -> ProcessingResult:
+    def process_file(self, file_path: Path, **kwargs: object) -> ProcessingResult:
         """Process a single audio file."""
         start_time = time.time()
 
         try:
             # Get preset configuration
+            preset = str(kwargs.get("preset", "music"))
             preset_config = self.config_manager.config.get_audio_preset(preset)
 
             # Get file info
@@ -95,7 +115,10 @@ class AudioProcessor(MediaProcessor):
 
             # Determine effective bitrate using SNR-based intelligent limiting
             folder_snr = kwargs.get("folder_snr")
-            effective_bitrate = self._calculate_effective_bitrate(file_path, audio_info, preset_config, folder_snr)
+            folder_snr_value = folder_snr if isinstance(folder_snr, (float, int)) else None
+            effective_bitrate = self._calculate_effective_bitrate(
+                file_path, audio_info, preset_config, folder_snr_value
+            )
 
             # Build and run FFmpeg command
             command = self.ffmpeg.build_audio_command(
@@ -128,7 +151,8 @@ class AudioProcessor(MediaProcessor):
 
             if size_improvement or is_lossless:
                 # Replace original with transcoded version
-                create_backups = self.config_manager.get_value("global_.create_backups", True)
+                create_backups_value = self.config_manager.get_value("global_.create_backups", default=True)
+                create_backups = bool(create_backups_value)
                 operation = self.file_manager.atomic_replace(
                     source_path=file_path,
                     temp_path=temp_file,
@@ -168,7 +192,7 @@ class AudioProcessor(MediaProcessor):
                 },
             )
 
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as e:
             processing_time = time.time() - start_time
 
             # Clean up any temporary files
@@ -189,25 +213,31 @@ class AudioProcessor(MediaProcessor):
     def process_directory(
         self,
         directory: Path,
+        *,
         recursive: bool = True,
-        **kwargs,
+        **kwargs: object,
     ) -> list[ProcessingResult]:
         """Process all audio files in directory with multithreading."""
         # Extract preset from kwargs
         preset = kwargs.pop("preset", "music")
 
+        from ..core.directory_processor import DirectoryProcessingConfig
+
+        config = DirectoryProcessingConfig(
+            recursive=recursive,
+            media_type="audio",
+            preset=str(preset),
+            folder_analysis_func=analyze_folder_snr,
+        )
         return process_directory_unified(
             processor=self,
             directory=directory,
-            recursive=recursive,
-            media_type="audio",
-            preset=preset,
-            folder_analysis_func=analyze_folder_snr,
+            config=config,
             **kwargs,
         )
 
     def _calculate_effective_bitrate(
-        self, file_path: Path, audio_info: dict[str, Any], preset_config, folder_snr: float | None = None
+        self, file_path: Path, audio_info: dict[str, Any], preset_config: AudioPreset, folder_snr: float | None = None
     ) -> str:
         """
         Calculate effective bitrate using SNR-based intelligent limiting.
@@ -216,6 +246,7 @@ class AudioProcessor(MediaProcessor):
             file_path: Path to the audio file
             audio_info: Audio metadata from FFprobe
             preset_config: AudioPreset configuration
+            folder_snr: Optional folder-wide SNR analysis result
 
         Returns:
             Effective bitrate string (e.g., "128k")
@@ -231,16 +262,19 @@ class AudioProcessor(MediaProcessor):
                 if target_bitrate_bps > input_bitrate_bps:
                     effective_bitrate = f"{input_bitrate_bps // 1000}k"
                     self.logger.info(
-                        f"Limiting bitrate for {file_path.name}: {preset_config.bitrate} → {effective_bitrate} (input limit, SNR scaling disabled)"
+                        "Limiting bitrate for %s: %s → %s (input limit, SNR scaling disabled)",
+                        file_path.name,
+                        preset_config.bitrate,
+                        effective_bitrate,
                     )
                     return effective_bitrate
 
-            self.logger.debug(f"Using preset bitrate for {file_path.name}: {preset_config.bitrate}")
+            self.logger.debug("Using preset bitrate for %s: %s", file_path.name, preset_config.bitrate)
             return preset_config.bitrate
 
         # SNR scaling enabled - calculate effective bitrate
         estimated_snr = folder_snr if folder_snr is not None else FFmpegProbe.estimate_snr(file_path, audio_info)
-        self.logger.debug(f"Estimated SNR for {file_path.name}: {estimated_snr:.1f} dB")
+        self.logger.debug("Estimated SNR for %s: %.1f dB", file_path.name, estimated_snr)
 
         # Calculate SNR-adjusted bitrate if below threshold
         if estimated_snr < preset_config.min_snr_db:
@@ -272,36 +306,45 @@ class AudioProcessor(MediaProcessor):
         # Log decision
         if limitation_reason:
             self.logger.info(
-                f"Limiting bitrate for {file_path.name}: {preset_config.bitrate} → {effective_bitrate} ({limitation_reason})"
+                "Limiting bitrate for %s: %s → %s (%s)",
+                file_path.name,
+                preset_config.bitrate,
+                effective_bitrate,
+                limitation_reason,
             )
         elif effective_bitrate != preset_config.bitrate:
-            self.logger.info(f"Using adjusted bitrate for {file_path.name}: {effective_bitrate}")
+            self.logger.info("Using adjusted bitrate for %s: %s", file_path.name, effective_bitrate)
         else:
-            self.logger.debug(f"Using preset bitrate for {file_path.name}: {preset_config.bitrate}")
+            self.logger.debug("Using preset bitrate for %s: %s", file_path.name, preset_config.bitrate)
 
         return effective_bitrate
 
-    def _analyze_files_parallel(self, all_files: list[Path], preset: str, max_workers: int, **kwargs) -> list[Path]:
+    def _analyze_files_parallel(
+        self, all_files: list[Path], preset: str, max_workers: int, **kwargs: object
+    ) -> list[Path]:
         """
         Analyze files in parallel to determine which ones need processing.
 
         This parallelizes the should_process check which involves FFmpeg calls.
         """
-        files_to_process = []
+        files_to_process: list[Path] = []
 
-        if len(all_files) <= 20:
+        # Constants for magic values
+        small_batch_threshold = 20
+
+        if len(all_files) <= small_batch_threshold:
             # For small sets, use sequential processing (overhead isn't worth it)
-            for file_path in all_files:
-                if self.should_process(file_path, preset=preset, **kwargs):
-                    files_to_process.append(file_path)
-            self.logger.info(f"Analysis complete: {len(files_to_process)}/{len(all_files)} files need processing")
+            files_to_process.extend(
+                file_path for file_path in all_files if self.should_process(file_path, preset=preset, **kwargs)
+            )
+            self.logger.info("Analysis complete: %d/%d files need processing", len(files_to_process), len(all_files))
             return files_to_process
 
         # For larger sets, use parallel analysis
         analysis_workers = min(max_workers, len(all_files) // 4)  # Don't use too many workers for analysis
         analysis_workers = max(1, analysis_workers)
 
-        self.logger.info(f"Analyzing {len(all_files)} files using {analysis_workers} workers...")
+        self.logger.info("Analyzing %d files using %d workers...", len(all_files), analysis_workers)
 
         with (
             tqdm(
@@ -328,10 +371,10 @@ class AudioProcessor(MediaProcessor):
 
                     # Update progress with current file being checked
                     progress.set_description(f"Checked {file_path.stem[:20]}...")
-                except Exception as e:
-                    self.logger.warning(f"Failed to analyze {file_path}: {e}")
+                except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as e:
+                    self.logger.warning("Failed to analyze %s: %s", file_path, e)
                 finally:
                     progress.update(1)
 
-        self.logger.info(f"Analysis complete: {len(files_to_process)}/{len(all_files)} files need processing")
+        self.logger.info("Analysis complete: %d/%d files need processing", len(files_to_process), len(all_files))
         return files_to_process

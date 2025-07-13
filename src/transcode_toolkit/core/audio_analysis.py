@@ -21,7 +21,7 @@ _file_cache: dict[Path, dict[str, Any]] = {}
 _folder_snr_cache: dict[Path, float] = {}
 
 
-def analyze_file(file_path: Path, use_cache: bool = True) -> dict[str, Any]:
+def analyze_file(file_path: Path, *, use_cache: bool = True) -> dict[str, Any]:
     """Get audio analysis for a single file with caching."""
     if use_cache and file_path in _file_cache:
         return _file_cache[file_path]
@@ -42,11 +42,8 @@ def analyze_file(file_path: Path, use_cache: bool = True) -> dict[str, Any]:
 
         if use_cache:
             _file_cache[file_path] = analysis
-
-        return analysis
-
-    except Exception as e:
-        LOG.warning(f"Failed to analyze {file_path}: {e}")
+    except (OSError, RuntimeError, ValueError) as e:
+        LOG.warning("Failed to analyze %s: %s", file_path, e)
         # Return minimal analysis with defaults
         analysis = {
             "duration": 0.0,
@@ -57,11 +54,10 @@ def analyze_file(file_path: Path, use_cache: bool = True) -> dict[str, Any]:
             "sample_rate": None,
             "channels": None,
         }
-
         if use_cache:
             _file_cache[file_path] = analysis
 
-        return analysis
+    return analysis
 
 
 def analyze_folder_snr(folder: Path, audio_files: list[Path], sample_percentage: float = 0.2) -> float:
@@ -101,12 +97,15 @@ def analyze_folder_snr(folder: Path, audio_files: list[Path], sample_percentage:
         try:
             analysis = analyze_file(file_path, use_cache=True)
             snr_values.append(analysis["estimated_snr"])
-        except Exception:
+        except (OSError, RuntimeError, ValueError):
+            # Skip files that can't be analyzed
             continue
 
     folder_snr = sum(snr_values) / len(snr_values) if snr_values else 60.0
 
-    LOG.debug(f"Folder {folder.name} SNR: {folder_snr:.1f} dB ({len(snr_values)} samples from {total_files} files)")
+    LOG.debug(
+        "Folder %s SNR: %.1f dB (%d samples from %d files)", folder.name, folder_snr, len(snr_values), total_files
+    )
 
     _folder_snr_cache[folder] = folder_snr
     return folder_snr

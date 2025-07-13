@@ -1,7 +1,13 @@
 """Shared failure table display utility for CLI commands."""
 
+# Constants for table formatting
+MAX_FILENAME_LENGTH = 37
+FILENAME_TRUNCATE_LENGTH = 34
+MAX_ERROR_MSG_LENGTH = 32
+ERROR_MSG_TRUNCATE_LENGTH = 29
 
-def print_failure_table(failed_results, media_type="media"):
+
+def print_failure_table(failed_results: list, media_type: str = "media") -> None:
     """
     Print a simple table showing conversion failures.
 
@@ -25,13 +31,13 @@ def print_failure_table(failed_results, media_type="media"):
     for result in failed_results:
         # Truncate long file names
         filename = result.source_file.name
-        if len(filename) > 37:
-            filename = filename[:34] + "..."
+        if len(filename) > MAX_FILENAME_LENGTH:
+            filename = filename[:FILENAME_TRUNCATE_LENGTH] + "..."
 
         # Truncate long error messages
         error_msg = result.message or "Unknown error"
-        if len(error_msg) > 32:
-            error_msg = error_msg[:29] + "..."
+        if len(error_msg) > MAX_ERROR_MSG_LENGTH:
+            error_msg = error_msg[:ERROR_MSG_TRUNCATE_LENGTH] + "..."
 
         print(f"{filename:<40} | {error_msg:<35}")
 

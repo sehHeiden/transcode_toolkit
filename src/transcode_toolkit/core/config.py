@@ -32,6 +32,13 @@ class ConfigManager:
     """Enhanced configuration manager with context support."""
 
     def __init__(self, config_path: Path | None = None) -> None:
+        """
+        Initialize enhanced configuration manager.
+
+        Args:
+            config_path: Optional path to config file
+
+        """
         self._config = MediaToolkitConfig.load_from_file(config_path) if config_path else _get_global_config()
         self._overrides: dict[str, Any] = {}
         self._context_stack: list[dict[str, Any]] = []
@@ -48,8 +55,8 @@ class ConfigManager:
         try:
             with config_path.open("r", encoding="utf-8") as f:
                 return yaml.safe_load(f) or {}
-        except Exception as e:
-            LOG.warning(f"Failed to load raw config from {config_path}: {e}")
+        except (OSError, yaml.YAMLError) as e:
+            LOG.warning("Failed to load raw config from %s: %s", config_path, e)
             return {}
 
     @property
@@ -62,24 +69,24 @@ class ConfigManager:
         """Get the raw YAML configuration data."""
         return self._raw_config
 
-    def get_value(self, key_path: str, default: Any = None) -> Any:
+    def get_value(self, key_path: str, default: object = None) -> object:
         """Get configuration value with override support."""
         # Check overrides first
         if key_path in self._overrides:
             return self._overrides[key_path]
 
-        # Navigate through config using dot notation
-        parts = key_path.split(".")
-        value = self._config
-
+        # Try to get from underlying config
         try:
+            value = self._config
+            parts = key_path.split(".")
             for part in parts:
                 value = getattr(value, part)
-            return value
         except AttributeError:
             return default
+        else:
+            return value
 
-    def set_override(self, key_path: str, value: Any) -> None:
+    def set_override(self, key_path: str, value: object) -> None:
         """Set a temporary configuration override."""
         self._overrides[key_path] = value
 
@@ -112,18 +119,27 @@ class ConfigContext:
     """Context manager for temporary configuration changes."""
 
     def __init__(self, config_manager: ConfigManager, overrides: dict[str, Any]) -> None:
+        """
+        Initialize configuration context.
+
+        Args:
+            config_manager: Configuration manager instance
+            overrides: Configuration overrides to apply
+
+        """
         self.config_manager = config_manager
         self.overrides = overrides
 
     def __enter__(self) -> ConfigManager:
+        """Enter the configuration context."""
         self.config_manager.push_context(self.overrides)
         return self.config_manager
 
-    def __exit__(self, _exc_type, _exc_val, _exc_tb):
+    def __exit__(self, _exc_type: object, _exc_val: object, _exc_tb: object) -> None:
+        """Exit the configuration context."""
         self.config_manager.pop_context()
-        return False
 
 
-def with_config_overrides(config_manager: ConfigManager, **overrides) -> ConfigContext:
+def with_config_overrides(config_manager: ConfigManager, **overrides: object) -> ConfigContext:
     """Create a context with configuration overrides."""
     return ConfigContext(config_manager, overrides)

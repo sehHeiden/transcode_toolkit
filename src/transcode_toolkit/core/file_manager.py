@@ -35,7 +35,8 @@ class FileOperation:
     success: bool = False
     timestamp: float = 0.0
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
+        """Set timestamp if not provided."""
         if self.timestamp == 0.0:
             self.timestamp = time.time()
 
@@ -47,6 +48,7 @@ class FileManager:
         self,
         backup_strategy: BackupStrategy = BackupStrategy.ON_SUCCESS,
     ) -> None:
+        """Initialize file manager with backup strategy."""
         self.backup_strategy = backup_strategy
         self.session_operations: list[FileOperation] = []
         self.session_backups: set[Path] = set()
@@ -75,16 +77,15 @@ class FileManager:
                 success=True,
             )
             self.session_operations.append(operation)
-
-            LOG.debug(f"Created backup: {backup_path}")
+            LOG.debug("Created backup: %s", backup_path)
+        except Exception as e:
+            LOG.exception("Failed to create backup for %s", file_path)
+            msg = f"Backup creation failed: {e}"
+            raise ProcessingError(msg, file_path=file_path, cause=e) from e
+        else:
             return backup_path
 
-        except Exception as e:
-            LOG.exception(f"Failed to create backup for {file_path}: {e}")
-            msg = f"Backup creation failed: {e}"
-            raise ProcessingError(msg, file_path=file_path, cause=e)
-
-    def atomic_replace(self, source_path: Path, temp_path: Path, create_backup: bool = True) -> FileOperation:
+    def atomic_replace(self, source_path: Path, temp_path: Path, *, create_backup: bool = True) -> FileOperation:
         """Atomically replace a file with proper backup handling."""
         backup_path = None
 
@@ -124,19 +125,16 @@ class FileManager:
             self.session_operations.append(operation)
 
             # Backup cleanup is now handled only at session end for ON_SUCCESS strategy
-
-            LOG.debug(f"Atomically replaced {source_path} -> {final_path}")
-            return operation
-
-        except Exception as e:
+            LOG.debug("Atomically replaced %s -> %s", source_path, final_path)
+        except (OSError, PermissionError, shutil.Error) as e:
             # Rollback on failure
             if backup_path and backup_path.exists():
                 try:
                     if not source_path.exists():
                         shutil.move(backup_path, source_path)
-                        LOG.info(f"Restored backup after failed replacement: {source_path}")
-                except Exception as restore_error:
-                    LOG.exception(f"Failed to restore backup: {restore_error}")
+                        LOG.info("Restored backup after failed replacement: %s", source_path)
+                except (OSError, PermissionError, shutil.Error):
+                    LOG.exception("Failed to restore backup")
 
             operation = FileOperation(
                 operation_type="file_replace",
@@ -147,7 +145,9 @@ class FileManager:
             self.session_operations.append(operation)
 
             msg = f"Atomic file replacement failed: {e}"
-            raise ProcessingError(msg, file_path=source_path, cause=e)
+            raise ProcessingError(msg, file_path=source_path, cause=e) from e
+        else:
+            return operation
 
     def _cleanup_backup(self, backup_path: Path) -> None:
         """Remove a backup file."""
@@ -155,9 +155,9 @@ class FileManager:
             if backup_path.exists():
                 backup_path.unlink()
                 self.session_backups.discard(backup_path)
-                LOG.debug(f"Cleaned up backup: {backup_path}")
-        except Exception as e:
-            LOG.warning(f"Failed to cleanup backup {backup_path}: {e}")
+                LOG.debug("Cleaned up backup: %s", backup_path)
+        except (OSError, PermissionError) as e:
+            LOG.warning("Failed to cleanup backup %s: %s", backup_path, e)
 
     def cleanup_session_backups(self) -> int:
         """Clean up all backups from this session based on strategy."""
@@ -172,7 +172,7 @@ class FileManager:
                 self._cleanup_backup(operation.backup_path)
                 cleaned_count += 1
 
-        LOG.info(f"Session cleanup: removed {cleaned_count} backup files")
+        LOG.info("Session cleanup: removed %d backup files", cleaned_count)
         return cleaned_count
 
     def get_session_summary(self) -> dict[str, Any]:

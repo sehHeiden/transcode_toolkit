@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING
@@ -29,6 +30,7 @@ class VideoProcessor(MediaProcessor):
     """Video transcoding processor using H.265/HEVC codec with SSIM-based quality optimization."""
 
     def __init__(self, config_manager: ConfigManager) -> None:
+        """Initialize video processor with config manager."""
         super().__init__("VideoProcessor")
         self.config_manager = config_manager
         # Use much longer timeout for video processing (30 minutes default)
@@ -43,9 +45,18 @@ class VideoProcessor(MediaProcessor):
     def can_process(self, file_path: Path) -> bool:
         """Check if file is a supported video format."""
         video_extensions = self.config_manager.get_value("video.extensions", set())
+        if not isinstance(video_extensions, set):
+            try:
+                # Check if it's iterable before converting to set
+                if hasattr(video_extensions, "__iter__") and not isinstance(video_extensions, (str, bytes)):
+                    video_extensions = set(video_extensions)
+                else:
+                    video_extensions = set()
+            except (TypeError, ValueError):
+                video_extensions = set()
         return file_path.suffix.lower() in video_extensions
 
-    def should_process(self, file_path: Path, **kwargs) -> bool:
+    def should_process(self, file_path: Path, **_kwargs: object) -> bool:
         """Check if file should be processed (not already optimized)."""
         try:
             video_info = FFmpegProbe.get_video_info(file_path)
@@ -81,32 +92,41 @@ class VideoProcessor(MediaProcessor):
                     # Skip if bitrate is already reasonable for resolution
                     if current_bps <= threshold * 1.2:  # 20% tolerance
                         self.logger.info(
-                            f"Skipping {file_path.name}: Already optimal {codec.upper()} ({current_bps / 1_000_000:.1f}Mbps vs target {threshold / 1_000_000:.1f}Mbps)"
+                            "Skipping %s: Already optimal %s (%.1fMbps vs target %.1fMbps)",
+                            file_path.name,
+                            codec.upper(),
+                            current_bps / 1_000_000,
+                            threshold / 1_000_000,
                         )
                         return False
 
                     # Allow reprocessing if significantly higher bitrate
                     self.logger.info(
-                        f"Will reprocess {file_path.name}: {codec.upper()} {current_bps / 1_000_000:.1f}Mbps → {threshold / 1_000_000:.1f}Mbps"
+                        "Will reprocess %s: %s %.1fMbps → %.1fMbps",
+                        file_path.name,
+                        codec.upper(),
+                        current_bps / 1_000_000,
+                        threshold / 1_000_000,
                     )
                     return True
 
                 # If bitrate is unknown, conservatively skip
-                self.logger.info(f"Skipping {file_path.name}: Already {codec.upper()} format (bitrate unknown)")
+                self.logger.info("Skipping %s: Already %s format (bitrate unknown)", file_path.name, codec.upper())
                 return False
 
+        except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as e:
+            self.logger.warning("Could not analyze %s: %s", file_path, e)
+            return False
+        else:
             return True
 
-        except Exception as e:
-            self.logger.warning(f"Could not analyze {file_path}: {e}")
-            return False
-
-    def process_file(self, file_path: Path, preset: str = "default", **kwargs) -> ProcessingResult:
+    def process_file(self, file_path: Path, **kwargs: object) -> ProcessingResult:  # noqa: PLR0915
         """Process a single video file with SSIM-guided optimization."""
         start_time = time.time()
 
         try:
             # Get preset configuration
+            preset = str(kwargs.get("preset", "default"))
             preset_config = self.config_manager.config.get_video_preset(preset)
 
             # Validate codec availability before proceeding
@@ -144,7 +164,9 @@ class VideoProcessor(MediaProcessor):
             force_crf = kwargs.get("force_crf")
             force_preset = kwargs.get("force_preset")
 
-            effective_crf = force_crf if force_crf is not None else preset_config.crf
+            effective_crf = (
+                int(force_crf) if force_crf is not None and isinstance(force_crf, (int, str)) else preset_config.crf
+            )
             effective_preset = force_preset if force_preset is not None else preset_config.preset
 
             # Build and run FFmpeg command
@@ -153,8 +175,8 @@ class VideoProcessor(MediaProcessor):
                 input_file=file_path,
                 output_file=temp_file,
                 codec=preset_config.codec,
-                crf=effective_crf,
-                preset=effective_preset,
+                crf=int(effective_crf),
+                preset=str(effective_preset),
                 preset_config=preset_config,
                 gpu=gpu,
             )
@@ -192,15 +214,27 @@ class VideoProcessor(MediaProcessor):
             # Log the actual result for debugging
             if savings_percent < 0:
                 self.logger.warning(
-                    f"File {file_path.name} INCREASED by {abs(savings_percent):.1f}% ({original_size:,} → {new_size:,} bytes)"
+                    "File %s INCREASED by %.1f%% (%s → %s bytes)",
+                    file_path.name,
+                    abs(savings_percent),
+                    f"{original_size:,}",
+                    f"{new_size:,}",
                 )
             else:
                 self.logger.info(
-                    f"File {file_path.name} savings: {savings_percent:.1f}% ({original_size:,} → {new_size:,} bytes)"
+                    "File %s savings: %.1f%% (%s → %s bytes)",
+                    file_path.name,
+                    savings_percent,
+                    f"{original_size:,}",
+                    f"{new_size:,}",
                 )
 
             # Check for minimum savings requirement (must be positive and >= threshold)
-            meets_savings_requirement = savings_percent >= min_savings_percent
+            meets_savings_requirement = (
+                savings_percent >= float(min_savings_percent)
+                if isinstance(min_savings_percent, (str, int, float))
+                else False
+            )
 
             # Always convert if source is not target codec
             source_codec = video_info.get("codec", "").lower()
@@ -212,7 +246,9 @@ class VideoProcessor(MediaProcessor):
             if savings_percent < 0:
                 # File got bigger - always restore backup regardless of codec
                 self.logger.error(
-                    f"File {file_path.name} increased in size by {abs(savings_percent):.1f}% - this should never happen!"
+                    "File %s increased in size by %.1f%% - this should never happen!",
+                    file_path.name,
+                    abs(savings_percent),
                 )
                 temp_file.unlink()  # Remove the bad transcoded file
 
@@ -236,11 +272,11 @@ class VideoProcessor(MediaProcessor):
             # Check safeguards BEFORE replacing the original file
             if meets_savings_requirement or is_non_target_codec:
                 # Savings requirement met or codec conversion - proceed with replacement
-                create_backups = self.config_manager.get_value("global_.create_backups", True)
+                create_backups = self.config_manager.get_value("global_.create_backups", default=True)
                 operation = self.file_manager.atomic_replace(
                     source_path=file_path,
                     temp_path=temp_file,
-                    create_backup=create_backups,
+                    create_backup=bool(create_backups),
                 )
 
                 # Get final file size for metadata
@@ -250,7 +286,9 @@ class VideoProcessor(MediaProcessor):
                 return ProcessingResult(
                     source_file=file_path,
                     status=ProcessingStatus.SUCCESS,
-                    message=f"Transcoded with {preset} preset (CRF {effective_crf}, {final_savings_percent:.1f}% savings)",
+                    message=(
+                        f"Transcoded with {preset} preset (CRF {effective_crf}, {final_savings_percent:.1f}% savings)"
+                    ),
                     output_file=operation.target_path,
                     original_size=original_size,
                     new_size=final_size,
@@ -270,7 +308,7 @@ class VideoProcessor(MediaProcessor):
             temp_file.unlink()
 
             skip_reason = f"Insufficient savings ({savings_percent:.1f}% < {min_savings_percent}% threshold)"
-            self.logger.warning(f"File {file_path.name}: {skip_reason}")
+            self.logger.warning("File %s: %s", file_path.name, skip_reason)
 
             return ProcessingResult(
                 source_file=file_path,
@@ -289,7 +327,7 @@ class VideoProcessor(MediaProcessor):
                 },
             )
 
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as e:
             processing_time = time.time() - start_time
 
             # Clean up any temporary files
@@ -310,20 +348,26 @@ class VideoProcessor(MediaProcessor):
     def process_directory(
         self,
         directory: Path,
+        *,
         recursive: bool = True,
-        **kwargs,
+        **kwargs: object,
     ) -> list[ProcessingResult]:
         """Process all video files in directory with multithreading."""
         # Extract preset from kwargs
         preset = kwargs.pop("preset", "default")
 
+        from ..core.directory_processor import DirectoryProcessingConfig
+
+        config = DirectoryProcessingConfig(
+            recursive=recursive,
+            media_type="video",
+            preset=str(preset),
+            folder_analysis_func=analyze_folder_quality,
+        )
         results = process_directory_unified(
             processor=self,
             directory=directory,
-            recursive=recursive,
-            media_type="video",
-            preset=preset,
-            folder_analysis_func=analyze_folder_quality,
+            config=config,
             **kwargs,
         )
 
@@ -333,25 +377,31 @@ class VideoProcessor(MediaProcessor):
         errors = [r for r in results if r.status.value == "error"]
 
         self.logger.info(
-            f"Video processing completed: {len(successful)} successful, {len(skipped)} skipped, {len(errors)} errors"
+            "Video processing completed: %d successful, %d skipped, %d errors",
+            len(successful),
+            len(skipped),
+            len(errors),
         )
 
         return results
 
-    def _analyze_files_parallel(self, all_files: list[Path], preset: str, max_workers: int, **kwargs) -> list[Path]:
+    def _analyze_files_parallel(
+        self, all_files: list[Path], _preset: str, max_workers: int, **kwargs: object
+    ) -> list[Path]:
         """Analyze files in parallel to determine which need processing."""
-        self.logger.info(f"Analyzing {len(all_files)} files to determine processing needs...")
+        self.logger.info("Analyzing %d files to determine processing needs...", len(all_files))
 
-        files_to_process = []
+        files_to_process: list[Path] = []
 
         # Use smaller worker count for analysis to avoid overwhelming system
         analysis_workers = min(max_workers, 4)
 
-        if analysis_workers == 1 or len(all_files) < 10:
+        # Constants for magic values
+        small_batch_threshold = 10
+
+        if analysis_workers == 1 or len(all_files) < small_batch_threshold:
             # Single-threaded analysis for small sets
-            for file_path in all_files:
-                if self.should_process(file_path, **kwargs):
-                    files_to_process.append(file_path)
+            files_to_process.extend(file_path for file_path in all_files if self.should_process(file_path, **kwargs))
         else:
             # Multi-threaded analysis
             with ThreadPoolExecutor(max_workers=analysis_workers) as executor:
@@ -364,8 +414,8 @@ class VideoProcessor(MediaProcessor):
                     try:
                         if future.result():
                             files_to_process.append(file_path)
-                    except Exception as e:
-                        self.logger.warning(f"Error analyzing {file_path}: {e}")
+                    except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as e:
+                        self.logger.warning("Error analyzing %s: %s", file_path, e)
 
-        self.logger.info(f"Analysis complete: {len(files_to_process)} files need processing")
+        self.logger.info("Analysis complete: %d files need processing", len(files_to_process))
         return files_to_process

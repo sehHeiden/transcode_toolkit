@@ -11,8 +11,32 @@ import yaml
 
 LOG = logging.getLogger(__name__)
 
-# Global config instance
-_global_config: MediaToolkitConfig | None = None
+
+# Configuration singleton
+class _ConfigSingleton:
+    """Configuration singleton holder."""
+
+    _instance: MediaToolkitConfig | None = None
+
+    @classmethod
+    def get_instance(cls) -> MediaToolkitConfig:
+        """Get the configuration instance."""
+        if cls._instance is None:
+            # Try to load from default config file (look in project root)
+            config_path = Path.cwd() / "config.yaml"
+            if config_path.exists():
+                cls._instance = MediaToolkitConfig.load_from_file(config_path)
+            else:
+                cls._instance = MediaToolkitConfig()
+        return cls._instance
+
+    @classmethod
+    def reset(cls) -> None:
+        """Reset the configuration instance."""
+        cls._instance = None
+
+
+_config_singleton = _ConfigSingleton()
 
 
 @dataclass
@@ -119,7 +143,7 @@ class MediaToolkitConfig:
                 data = yaml.safe_load(f)
 
             return cls._from_dict(data)
-        except Exception as e:
+        except (OSError, yaml.YAMLError) as e:
             LOG.warning("Failed to load config from %s: %s", config_path, e)
             return cls()
 
@@ -146,8 +170,16 @@ class MediaToolkitConfig:
     @classmethod
     def _from_dict(cls, data: dict[str, Any]) -> MediaToolkitConfig:
         """Create config from dictionary."""
-        # Parse audio config
-        audio_data = data.get("audio", {})
+        # Parse each config section
+        audio_config = cls._parse_audio_config(data.get("audio", {}))
+        video_config = cls._parse_video_config(data.get("video", {}))
+        global_config = cls._parse_global_config(data.get("global", {}))
+
+        return cls(audio=audio_config, video=video_config, global_=global_config)
+
+    @classmethod
+    def _parse_audio_config(cls, audio_data: dict[str, Any]) -> AudioConfig:
+        """Parse audio configuration."""
         audio_presets = {}
         for name, preset_data in audio_data.get("presets", {}).items():
             try:
@@ -163,19 +195,22 @@ class MediaToolkitConfig:
                     )
                 else:
                     LOG.warning("Incomplete audio preset data for '%s': missing required fields", name)
-            except Exception as e:
+            except (TypeError, ValueError) as e:
                 LOG.warning("Failed to load audio preset '%s': %s", name, e)
 
-        audio_config = AudioConfig(
+        return AudioConfig(
             size_keep_ratio=audio_data.get("size_keep_ratio", 0.95),
             extensions=audio_data.get("extensions", [".flac", ".mp3", ".wav", ".aac", ".m4a", ".ogg", ".wma"]),
             presets=audio_presets,
             quality_thresholds=audio_data.get("quality_thresholds", {}),
         )
 
-        # Parse video config
-        video_data = data.get("video", {})
+    @classmethod
+    def _parse_video_config(cls, video_data: dict[str, Any]) -> VideoConfig:
+        """Parse video configuration."""
         video_presets = {}
+
+        # Parse manual presets
         for name, preset_data in video_data.get("presets", {}).items():
             try:
                 if (
@@ -193,15 +228,30 @@ class MediaToolkitConfig:
                         quality_param=preset_data.get("quality_param"),
                     )
                 else:
-                    LOG.warning(f"Incomplete video preset data for '{name}': missing required fields")
-            except Exception as e:
-                LOG.warning(f"Failed to load video preset '{name}': {e}")
+                    LOG.warning("Incomplete video preset data for '%s': missing required fields", name)
+            except (TypeError, ValueError) as e:
+                LOG.warning("Failed to load video preset '%s': %s", name, e)
 
-        # Generate ALL possible CRF/speed combinations automatically
+        # Generate automatic presets
+        cls._generate_video_presets(video_data, video_presets)
+
+        return VideoConfig(
+            min_savings_percent=video_data.get("min_savings_percent", 10.0),
+            size_keep_ratio=video_data.get("size_keep_ratio", 0.95),
+            extensions=video_data.get(
+                "extensions",
+                [".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v"],
+            ),
+            presets=video_presets,
+        )
+
+    @classmethod
+    def _generate_video_presets(cls, video_data: dict[str, Any], video_presets: dict[str, VideoPreset]) -> None:
+        """Generate automatic video presets."""
         codecs = video_data.get("codecs", [])
         crf_base = video_data.get("crf_base", {})
-        crf_offsets = video_data.get("crf_offsets", [-6, 0, 2, 6])  # Available CRF offsets
-        speed_options = video_data.get("speed_options", ["medium", "fast", "slow"])  # Available speeds
+        crf_offsets = video_data.get("crf_offsets", [-6, 0, 2, 6])
+        speed_options = video_data.get("speed_options", ["medium", "fast", "slow"])
 
         # Codec name mapping for preset names
         codec_names = {
@@ -215,21 +265,16 @@ class MediaToolkitConfig:
             "hevc_qsv": "intel",
         }
 
-        # Generate ALL possible combinations: codec × CRF offset × speed
+        # Generate ALL possible combinations: codec x CRF offset x speed
         for codec in codecs:
             short_name = codec_names.get(codec, codec.replace("lib", ""))
             base_crf = crf_base.get(codec, 24)
 
             for crf_offset in crf_offsets:
                 for speed_preset in speed_options:
-                    # Create preset name: codec_crf{offset}_speed{speed}
-                    # Examples: h265_crf-12_speedveryslow, av1_crf0_speedmedium
                     preset_name = f"{short_name}_crf{crf_offset}_speed{speed_preset}"
-
-                    # Calculate final CRF
                     final_crf = base_crf + crf_offset
 
-                    # Add VideoPreset with completely independent CRF and speed
                     video_presets[preset_name] = VideoPreset(
                         crf=final_crf,
                         codec=codec,
@@ -237,56 +282,33 @@ class MediaToolkitConfig:
                         description=f"{codec} CRF {final_crf} (offset {crf_offset:+d}), speed {speed_preset}",
                     )
 
-        # Add default preset that aliases a balanced H.265 preset
-        # Look for a preset with CRF offset 0 and medium speed
+        # Add default preset
         default_preset_name = "h265_crf0_speedmedium"
         if default_preset_name in video_presets:
             video_presets["default"] = video_presets[default_preset_name]
 
-        video_config = VideoConfig(
-            min_savings_percent=video_data.get("min_savings_percent", 10.0),
-            size_keep_ratio=video_data.get("size_keep_ratio", 0.95),
-            extensions=video_data.get(
-                "extensions",
-                [".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v"],
-            ),
-            presets=video_presets,
-        )
-
-        # Parse global config
-        global_data = data.get("global", {})
-
+    @classmethod
+    def _parse_global_config(cls, global_data: dict[str, Any]) -> GlobalConfig:
+        """Parse global configuration."""
         # Validate backup strategy
         cleanup_backups = global_data.get("cleanup_backups", "on_success")
         valid_strategies = {"never", "on_success"}
         if cleanup_backups not in valid_strategies:
             LOG.warning(
-                f"Invalid backup strategy '{cleanup_backups}'. Using 'on_success'. "
-                f"Valid options: {', '.join(valid_strategies)}"
+                "Invalid backup strategy '%s'. Using 'on_success'. Valid options: %s",
+                cleanup_backups,
+                ", ".join(valid_strategies),
             )
             cleanup_backups = "on_success"
 
-        global_config = GlobalConfig(
+        return GlobalConfig(
             default_workers=global_data.get("default_workers"),
             log_level=global_data.get("log_level", "INFO"),
             create_backups=global_data.get("create_backups", True),
             cleanup_backups=cleanup_backups,
         )
 
-        return cls(audio=audio_config, video=video_config, global_=global_config)
-
 
 def get_config() -> MediaToolkitConfig:
     """Get the global configuration instance."""
-    global _global_config
-
-    if _global_config is None:
-        # Try to load from default config file (look in project root)
-        config_path = Path.cwd() / "config.yaml"
-        if config_path.exists():
-            _global_config = MediaToolkitConfig.load_from_file(config_path)
-        else:
-            _global_config = MediaToolkitConfig()
-
-    # Cast to the expected type for static analysis
-    return _global_config  # type: ignore
+    return _config_singleton.get_instance()

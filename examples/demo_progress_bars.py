@@ -6,7 +6,7 @@ import time
 from tqdm import tqdm
 
 
-def demo_separate_progress_bars():
+def demo_separate_progress_bars() -> None:
     """Demonstrate separate progress bars for video and audio processing."""
     print("🎯 DEMO: Separate Progress Bars for Video and Audio Analysis")
     print("=" * 65)

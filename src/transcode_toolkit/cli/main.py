@@ -25,7 +25,7 @@ class MediaToolkitCLI:
 
     @staticmethod
     def setup_logging(verbosity: int) -> None:
-        """Setup logging based on verbosity level."""
+        """Set up logging based on verbosity level."""
         level_map = {
             0: logging.WARNING,
             1: logging.INFO,

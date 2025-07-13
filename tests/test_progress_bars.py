@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 from src.transcode_toolkit.core.unified_estimate import analyze_directory
 
 
-def test_separate_progress_bars_creation():
+def test_separate_progress_bars_creation() -> None:
     """Test that separate progress bars are created for video and audio processing."""
     # Create test directory and mock files
     test_dir = Path("test_media")
@@ -56,7 +56,7 @@ def test_separate_progress_bars_creation():
         mock_audio_progress = MagicMock()
 
         # Configure tqdm to return different instances based on desc parameter
-        def tqdm_side_effect(*args, **kwargs):
+        def tqdm_side_effect(*_args: object, **kwargs: dict[str, object]) -> MagicMock:
             if kwargs.get("desc") == "📹 Video analysis":
                 return mock_video_progress
             if kwargs.get("desc") == "🔊 Audio analysis":
@@ -73,7 +73,8 @@ def test_separate_progress_bars_creation():
             analyses, optimal_presets = analyze_directory(test_dir)
 
         # Verify separate progress bars were created
-        assert mock_tqdm.call_count == 2
+        expected_progress_bars = 2  # One for video and one for audio
+        assert mock_tqdm.call_count == expected_progress_bars
 
         # Check video progress bar was created with correct parameters
         video_calls = [call for call in mock_tqdm.call_args_list if call[1].get("desc") == "📹 Video analysis"]
@@ -87,7 +88,8 @@ def test_separate_progress_bars_creation():
         audio_calls = [call for call in mock_tqdm.call_args_list if call[1].get("desc") == "🔊 Audio analysis"]
         assert len(audio_calls) == 1
         audio_call = audio_calls[0]
-        assert audio_call[1]["total"] == 2  # 1 audio file + 1 video file with audio track
+        expected_audio_files = 2  # 1 audio file + 1 video file with audio track
+        assert audio_call[1]["total"] == expected_audio_files
         assert audio_call[1]["unit"] == "file"
         assert audio_call[1]["position"] == 1
 
@@ -100,7 +102,7 @@ def test_separate_progress_bars_creation():
         mock_audio_progress.close.assert_called_once()
 
 
-def test_no_progress_bars_in_verbose_mode():
+def test_no_progress_bars_in_verbose_mode() -> None:
     """Test that no progress bars are created in verbose mode."""
     test_dir = Path("test_media")
 
@@ -144,13 +146,13 @@ def test_no_progress_bars_in_verbose_mode():
         mock_tqdm.assert_not_called()
 
 
-def test_optimal_audio_settings_shown():
+def test_optimal_audio_settings_shown() -> None:
     """Test that optimal audio settings are included in the output."""
     test_dir = Path("test_media")
 
     with (
         patch("src.transcode_toolkit.core.unified_estimate.list") as mock_list,
-        patch("src.transcode_toolkit.core.unified_estimate.FFmpegProbe") as mock_probe,
+        patch("src.transcode_toolkit.core.unified_estimate.FFmpegProbe"),
         patch("src.transcode_toolkit.core.unified_estimate._analyze_audio_file") as mock_audio_analyze,
         patch("src.transcode_toolkit.core.unified_estimate.ConfigManager") as mock_config,
     ):
@@ -190,4 +192,5 @@ def test_optimal_audio_settings_shown():
         assert len(analyses) == 1
         assert analyses[0].file_type == "audio"
         assert analyses[0].best_preset == "music"
-        assert analyses[0].savings_percent == 30.0
+        expected_savings_percent = 30.0
+        assert analyses[0].savings_percent == expected_savings_percent

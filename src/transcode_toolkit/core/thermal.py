@@ -33,8 +33,10 @@ def get_thermal_safe_worker_count(configured_workers: int | None, media_type: Me
         safe_workers = min(configured_workers, _get_thermal_limit(media_type))
         if safe_workers < configured_workers:
             LOG.warning(
-                f"Reducing configured workers from {configured_workers} to {safe_workers} "
-                f"due to thermal/system load constraints for {media_type} processing"
+                "Reducing configured workers from %d to %d due to thermal/system load constraints for %s processing",
+                configured_workers,
+                safe_workers,
+                media_type,
             )
         return safe_workers
 
@@ -67,22 +69,95 @@ def get_thermal_safe_worker_count(configured_workers: int | None, media_type: Me
         # If system is already under high load, reduce workers further
         if cpu_percent > cpu_threshold:
             max_workers = max(1, max_workers // 2)
-            LOG.warning(f"High CPU load detected ({cpu_percent:.1f}%), reducing {media_type} workers to {max_workers}")
+            LOG.warning(
+                "High CPU load detected (%.1f%%), reducing %s workers to %d", cpu_percent, media_type, max_workers
+            )
 
         # Apply media-specific cap
         max_workers = min(max_workers, max_cap)
 
         LOG.info(
-            f"{media_type.title()} thermal-safe configuration: {physical_cores} physical cores, {logical_cores} logical cores, "
-            f"CPU load: {cpu_percent:.1f}%. Using {max_workers} workers for thermal safety."
+            "%s thermal-safe configuration: %d physical cores, %d logical cores, "
+            "CPU load: %.1f%%. Using %d workers for thermal safety.",
+            media_type.title(),
+            physical_cores,
+            logical_cores,
+            cpu_percent,
+            max_workers,
         )
 
+    except (OSError, AttributeError, ValueError) as e:
+        # Very conservative fallback if monitoring fails
+        LOG.warning("Failed to detect system specs with psutil: %s. Using conservative fallback of 1 worker.", e)
+        return 1
+    else:
         return max_workers
 
-    except Exception as e:
-        # Very conservative fallback if monitoring fails
-        LOG.warning(f"Failed to detect system specs with psutil: {e}. Using conservative fallback of 1 worker.")
-        return 1
+
+# Temperature thresholds (Celsius)
+VIDEO_TEMP_HIGH = 65
+VIDEO_TEMP_MODERATE = 55
+AUDIO_TEMP_HIGH = 70
+AUDIO_TEMP_MODERATE = 60
+
+# Memory usage thresholds (percentage)
+VIDEO_MEMORY_THRESHOLD = 75
+AUDIO_MEMORY_THRESHOLD = 80
+
+# Default worker limits
+VIDEO_DEFAULT_WORKERS = 2
+AUDIO_DEFAULT_WORKERS = 4
+VIDEO_FALLBACK_WORKERS = 1
+AUDIO_FALLBACK_WORKERS = 2
+
+
+def _get_max_temperature() -> float:
+    """Get maximum current temperature from all available sensors."""
+    if not hasattr(psutil, "sensors_temperatures"):
+        return 0.0
+
+    temps = psutil.sensors_temperatures()
+    if not temps:
+        return 0.0
+
+    max_temp = 0.0
+    for entries in temps.values():
+        for entry in entries:
+            if entry.current and entry.current > max_temp:
+                max_temp = entry.current
+    return max_temp
+
+
+def _get_thermal_limit_by_temperature(media_type: MediaType, max_temp: float) -> int | None:
+    """Get worker limit based on temperature thresholds."""
+    if max_temp <= 0:
+        return None
+
+    if media_type == "video":
+        if max_temp > VIDEO_TEMP_HIGH:
+            return 1
+        if max_temp > VIDEO_TEMP_MODERATE:
+            return 2
+    else:  # audio
+        if max_temp > AUDIO_TEMP_HIGH:
+            return 2
+        if max_temp > AUDIO_TEMP_MODERATE:
+            return 3
+
+    return None
+
+
+def _get_thermal_limit_by_memory(media_type: MediaType) -> int | None:
+    """Get worker limit based on memory usage."""
+    try:
+        memory = psutil.virtual_memory()
+        threshold = VIDEO_MEMORY_THRESHOLD if media_type == "video" else AUDIO_MEMORY_THRESHOLD
+
+        if memory.percent > threshold:
+            return VIDEO_FALLBACK_WORKERS if media_type == "video" else AUDIO_FALLBACK_WORKERS
+    except (AttributeError, OSError):
+        pass
+    return None
 
 
 def _get_thermal_limit(media_type: MediaType) -> int:
@@ -97,43 +172,24 @@ def _get_thermal_limit(media_type: MediaType) -> int:
 
     """
     try:
-        # Try to get temperature sensors (Linux systems mostly)
-        if hasattr(psutil, "sensors_temperatures"):
-            temps = psutil.sensors_temperatures()
-            if temps:
-                max_temp = 0
-                for entries in temps.values():
-                    for entry in entries:
-                        if entry.current and entry.current > max_temp:
-                            max_temp = entry.current
+        # Check temperature-based limits first
+        max_temp = _get_max_temperature()
+        temp_limit = _get_thermal_limit_by_temperature(media_type, max_temp)
+        if temp_limit is not None:
+            return temp_limit
 
-                # Different temperature thresholds based on media type
-                if media_type == "video":
-                    # More conservative for video encoding
-                    if max_temp > 65:  # Above 65°C, reduce workers for video
-                        return 1
-                    if max_temp > 55:  # Above 55°C, moderate reduction
-                        return 2
-                else:  # audio
-                    # Less conservative for audio encoding
-                    if max_temp > 70:  # Above 70°C, reduce workers
-                        return 2
-                    if max_temp > 60:  # Above 60°C, moderate reduction
-                        return 3
+        # Check memory-based limits
+        memory_limit = _get_thermal_limit_by_memory(media_type)
+        if memory_limit is not None:
+            return memory_limit
 
-        # Check available memory as another thermal/stability indicator
-        memory = psutil.virtual_memory()
-        memory_threshold = 75 if media_type == "video" else 80
+        # Return default thermal-safe limits
 
-        if memory.percent > memory_threshold:
-            return 1 if media_type == "video" else 2
-
-        # Default thermal-safe limits by media type
-        return 2 if media_type == "video" else 4
-
-    except Exception:
+    except (OSError, AttributeError, ValueError):
         # If we can't monitor anything, be very conservative
-        return 1 if media_type == "video" else 2
+        return VIDEO_FALLBACK_WORKERS if media_type == "video" else AUDIO_FALLBACK_WORKERS
+    else:
+        return VIDEO_DEFAULT_WORKERS if media_type == "video" else AUDIO_DEFAULT_WORKERS
 
 
 def check_thermal_throttling(media_type: MediaType) -> None:
@@ -149,9 +205,10 @@ def check_thermal_throttling(media_type: MediaType) -> None:
         threshold = 85 if media_type == "video" else 90
 
         if cpu_percent > threshold:
-            LOG.warning(f"High CPU usage detected during {media_type} processing: {cpu_percent:.1f}%")
+            LOG.warning("High CPU usage detected during %s processing: %.1f%%", media_type, cpu_percent)
             # Brief pause to allow cooling
             time.sleep(1.0)
 
-    except Exception:
-        pass  # Don't fail processing due to monitoring issues
+    except (OSError, AttributeError):
+        # Log this issue since it might indicate a real problem
+        LOG.debug("Could not check thermal throttling for %s processing", media_type)
