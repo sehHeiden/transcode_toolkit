@@ -12,29 +12,37 @@ def test_separate_progress_bars_creation() -> None:
     test_dir = Path("test_media")
 
     with (
-        patch("src.transcode_toolkit.core.unified_estimate.list") as mock_list,
-        patch("src.transcode_toolkit.core.unified_estimate.FFmpegProbe") as mock_probe,
+        patch("src.transcode_toolkit.core.unified_estimate.get_media_files") as mock_get_media_files,
+        patch(
+            "src.transcode_toolkit.core.unified_estimate.get_video_files_with_audio"
+        ) as mock_get_video_files_with_audio,
+        patch("src.transcode_toolkit.core.ffmpeg.FFmpegProbe") as mock_probe,
         patch("src.transcode_toolkit.core.unified_estimate.tqdm") as mock_tqdm,
-        patch("src.transcode_toolkit.core.unified_estimate._analyze_video_file") as mock_video_analyze,
+        patch("src.transcode_toolkit.core.unified_estimate.process_video_files") as mock_video_process,
         patch("src.transcode_toolkit.core.unified_estimate._analyze_audio_file") as mock_audio_analyze,
-        patch("src.transcode_toolkit.core.unified_estimate._analyze_video_audio_track") as mock_video_audio_analyze,
-        patch("src.transcode_toolkit.core.unified_estimate.ConfigManager") as mock_config,
+        patch("src.transcode_toolkit.core.unified_estimate.compare_video_presets") as mock_compare_video,
+        patch("src.transcode_toolkit.core.unified_estimate.recommend_video_preset") as mock_recommend_video,
+        patch("src.transcode_toolkit.core.unified_estimate.print_video_comparison"),
     ):
         # Setup mocks
         mock_video_file = Path("test.mp4")
         mock_audio_file = Path("test.mp3")
 
-        # Mock directory listing
-        mock_list.return_value = [mock_video_file, mock_audio_file]
-
-        # Mock config
-        mock_config_instance = MagicMock()
-        mock_config_instance.config.video.extensions = [".mp4", ".mkv"]
-        mock_config_instance.config.audio.extensions = [".mp3", ".flac"]
-        mock_config.return_value = mock_config_instance
+        # Mock file discovery functions
+        mock_get_media_files.return_value = ([mock_video_file], [mock_audio_file])
+        mock_get_video_files_with_audio.return_value = []
 
         # Mock FFmpegProbe for video file with audio track
         mock_probe.get_audio_info.return_value = {"duration": 100}
+        mock_probe.get_video_info.return_value = {
+            "size": 1024 * 1024 * 100,  # 100MB
+            "duration": 300,
+            "codec": "h264",
+            "width": 1920,
+            "height": 1080,
+            "bitrate": 5000000,
+            "fps": 30.0,
+        }
 
         # Mock analysis functions
         mock_video_analysis = MagicMock()
@@ -47,9 +55,12 @@ def test_separate_progress_bars_creation() -> None:
         mock_audio_analysis.best_preset = "music"
         mock_audio_analysis.savings_percent = 30.0
 
-        mock_video_analyze.return_value = mock_video_analysis
+        mock_video_process.return_value = [mock_video_analysis]
         mock_audio_analyze.return_value = mock_audio_analysis
-        mock_video_audio_analyze.return_value = mock_audio_analysis
+
+        # Mock video preset comparison
+        mock_compare_video.return_value = []
+        mock_recommend_video.return_value = "h265_balanced"
 
         # Mock progress bars
         mock_video_progress = MagicMock()
@@ -88,13 +99,14 @@ def test_separate_progress_bars_creation() -> None:
         audio_calls = [call for call in mock_tqdm.call_args_list if call[1].get("desc") == "🔊 Audio analysis"]
         assert len(audio_calls) == 1
         audio_call = audio_calls[0]
-        expected_audio_files = 2  # 1 audio file + 1 video file with audio track
+        expected_audio_files = 1  # 1 audio file only
         assert audio_call[1]["total"] == expected_audio_files
         assert audio_call[1]["unit"] == "file"
         assert audio_call[1]["position"] == 1
 
         # Verify progress bars were updated correctly
-        mock_video_progress.update.assert_called_with(1)
+        # The video progress bar is updated inside process_video_files
+        # The audio progress bar is updated once per audio file
         mock_audio_progress.update.assert_called_with(1)
 
         # Verify progress bars were closed
@@ -107,33 +119,47 @@ def test_no_progress_bars_in_verbose_mode() -> None:
     test_dir = Path("test_media")
 
     with (
-        patch("src.transcode_toolkit.core.unified_estimate.list") as mock_list,
-        patch("src.transcode_toolkit.core.unified_estimate.FFmpegProbe") as mock_probe,
+        patch("src.transcode_toolkit.core.unified_estimate.get_media_files") as mock_get_media_files,
+        patch(
+            "src.transcode_toolkit.core.unified_estimate.get_video_files_with_audio"
+        ) as mock_get_video_files_with_audio,
+        patch("src.transcode_toolkit.core.ffmpeg.FFmpegProbe") as mock_probe,
         patch("src.transcode_toolkit.core.unified_estimate.tqdm") as mock_tqdm,
-        patch("src.transcode_toolkit.core.unified_estimate._analyze_video_file") as mock_video_analyze,
+        patch("src.transcode_toolkit.core.unified_estimate.process_video_files") as mock_video_process,
         patch("src.transcode_toolkit.core.unified_estimate._analyze_audio_file") as mock_audio_analyze,
-        patch("src.transcode_toolkit.core.unified_estimate.ConfigManager") as mock_config,
+        patch("src.transcode_toolkit.core.unified_estimate.compare_video_presets") as mock_compare_video,
+        patch("src.transcode_toolkit.core.unified_estimate.recommend_video_preset") as mock_recommend_video,
+        patch("src.transcode_toolkit.core.unified_estimate.print_video_comparison"),
     ):
         # Setup mocks
         mock_video_file = Path("test.mp4")
         mock_audio_file = Path("test.mp3")
 
-        mock_list.return_value = [mock_video_file, mock_audio_file]
-
-        # Mock config
-        mock_config_instance = MagicMock()
-        mock_config_instance.config.video.extensions = [".mp4", ".mkv"]
-        mock_config_instance.config.audio.extensions = [".mp3", ".flac"]
-        mock_config.return_value = mock_config_instance
+        # Mock file discovery functions
+        mock_get_media_files.return_value = ([mock_video_file], [mock_audio_file])
+        mock_get_video_files_with_audio.return_value = []  # No video files with audio
 
         # Mock FFmpegProbe
         mock_probe.get_audio_info.return_value = None  # No audio track in video
+        mock_probe.get_video_info.return_value = {
+            "size": 1024 * 1024 * 100,  # 100MB
+            "duration": 300,
+            "codec": "h264",
+            "width": 1920,
+            "height": 1080,
+            "bitrate": 5000000,
+            "fps": 30.0,
+        }
 
         # Mock analysis functions
         mock_video_analysis = MagicMock()
         mock_audio_analysis = MagicMock()
-        mock_video_analyze.return_value = mock_video_analysis
+        mock_video_process.return_value = [mock_video_analysis]
         mock_audio_analyze.return_value = mock_audio_analysis
+
+        # Mock video preset comparison
+        mock_compare_video.return_value = []
+        mock_recommend_video.return_value = "h265_balanced"
 
         # Enable verbose mode (INFO level logging)
         with patch("src.transcode_toolkit.core.unified_estimate.LOG") as mock_log:
@@ -151,20 +177,18 @@ def test_optimal_audio_settings_shown() -> None:
     test_dir = Path("test_media")
 
     with (
-        patch("src.transcode_toolkit.core.unified_estimate.list") as mock_list,
-        patch("src.transcode_toolkit.core.unified_estimate.FFmpegProbe"),
+        patch("src.transcode_toolkit.core.unified_estimate.get_media_files") as mock_get_media_files,
+        patch(
+            "src.transcode_toolkit.core.unified_estimate.get_video_files_with_audio"
+        ) as mock_get_video_files_with_audio,
         patch("src.transcode_toolkit.core.unified_estimate._analyze_audio_file") as mock_audio_analyze,
-        patch("src.transcode_toolkit.core.unified_estimate.ConfigManager") as mock_config,
+        patch("src.transcode_toolkit.core.unified_estimate.process_video_files") as mock_video_process,
     ):
         # Setup mocks
         mock_audio_file = Path("test.mp3")
-        mock_list.return_value = [mock_audio_file]
-
-        # Mock config
-        mock_config_instance = MagicMock()
-        mock_config_instance.config.video.extensions = [".mp4"]
-        mock_config_instance.config.audio.extensions = [".mp3"]
-        mock_config.return_value = mock_config_instance
+        mock_get_media_files.return_value = ([], [mock_audio_file])
+        mock_get_video_files_with_audio.return_value = []
+        mock_video_process.return_value = []
 
         # Mock audio analysis with optimal settings
         mock_audio_analysis = MagicMock()

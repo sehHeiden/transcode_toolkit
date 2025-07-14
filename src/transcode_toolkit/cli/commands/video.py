@@ -6,8 +6,6 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ..failure_table import print_failure_table
-
 if TYPE_CHECKING:
     import argparse
 
@@ -203,6 +201,8 @@ class VideoCommands:
 
             # Show failure table if there are failures
             if failed:
+                from . import print_failure_table
+
                 print_failure_table(failed, "video")
 
             return 0 if len(successful) == len(results) else 1
@@ -217,7 +217,6 @@ class VideoCommands:
             from ...core.unified_estimate import analyze_directory, print_detailed_summary
 
             # Use unified estimate with detailed per-file analysis
-            save_settings = getattr(args, "save_settings", False)
             csv_path = getattr(args, "csv", None)
 
             # Check if we're in verbose mode
@@ -227,7 +226,7 @@ class VideoCommands:
                 print("📊 Analyzing media files for optimization opportunities...")
                 print("💡 Use -v for detailed progress information")
 
-            analyses, optimal_presets = analyze_directory(args.path, save_settings=save_settings)
+            analyses, optimal_presets = analyze_directory(args.path)
             print_detailed_summary(analyses, optimal_presets, csv_path=csv_path)
 
         except (OSError, ValueError):

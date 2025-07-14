@@ -159,20 +159,44 @@ def _create_folder_samples(folder_groups: dict[Path, list[Path]]) -> tuple[list[
     """Create sample files for SNR estimation from each folder."""
     sample_files = []
     folder_snr_cache = {}
-    max_samples_per_folder = 3  # Maximum number of samples per folder for SNR estimation
+
+    # Calculate adaptive sampling based on total files
+    total_files = sum(len(files) for files in folder_groups.values())
+
+    # For larger collections, sample more files per folder but cap the total
+    small_collection_threshold = 20
+    medium_collection_threshold = 100
+
+    if total_files <= small_collection_threshold:
+        # Small collections: analyze all files
+        max_samples_per_folder = 999  # Effectively no limit
+        LOG.info("Small collection detected (%d files) - analyzing all files", total_files)
+    elif total_files <= medium_collection_threshold:
+        # Medium collections: sample more generously
+        max_samples_per_folder = 10
+        LOG.info(
+            "Medium collection detected (%d files) - sampling %d files per folder", total_files, max_samples_per_folder
+        )
+    else:
+        # Large collections: more conservative sampling
+        max_samples_per_folder = 5
+        LOG.info(
+            "Large collection detected (%d files) - sampling %d files per folder", total_files, max_samples_per_folder
+        )
 
     for folder, files in folder_groups.items():
-        # Sample a few files from each folder for SNR estimation
+        # Sample files from each folder for SNR estimation
+        num_samples = min(len(files), max_samples_per_folder)
         folder_samples = (
-            files[:max_samples_per_folder]
-            if len(files) <= max_samples_per_folder
-            else random.sample(files, max_samples_per_folder)
+            files[:num_samples] if len(files) <= max_samples_per_folder else random.sample(files, num_samples)
         )
         sample_files.extend(folder_samples)
+        LOG.debug("Folder %s: %d files, sampling %d", folder.name, len(files), len(folder_samples))
 
         # Use default SNR for fast estimation
         folder_snr_cache[folder] = 65.0  # Conservative estimate for mixed content
 
+    LOG.info("Total files found: %d, sample files for analysis: %d", total_files, len(sample_files))
     return sample_files, folder_snr_cache
 
 

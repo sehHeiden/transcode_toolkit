@@ -6,8 +6,6 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ..failure_table import print_failure_table
-
 if TYPE_CHECKING:
     import argparse
 
@@ -92,6 +90,8 @@ class AudioCommands:
 
             # Show failure table if there are failures
             if failed:
+                from . import print_failure_table
+
                 print_failure_table(failed, "audio")
 
             return 0 if len(successful) == len(results) else 1

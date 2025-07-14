@@ -6,8 +6,8 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 
 from transcode_toolkit.audio.estimate import compare_presets, recommend_preset
+from transcode_toolkit.core.unified_estimate import ffmpeg_cmd
 from transcode_toolkit.processors.audio_processor import AudioProcessor
-from transcode_toolkit.video.transcode import ffmpeg_cmd
 
 
 @pytest.fixture
