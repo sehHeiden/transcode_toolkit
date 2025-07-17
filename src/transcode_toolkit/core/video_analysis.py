@@ -22,19 +22,8 @@ COLOR_CHANNELS = 3
 ANALYSIS_RESOLUTION = 360
 RESERVED_SMALL_FILE_COUNT = 3
 RESERVED_MEDIUM_FILE_COUNT = 10
-FOUR_K_HEIGHT = 2160
-TWO_K_HEIGHT = 1440
-FULL_HD_HEIGHT = 1080
-HD_HEIGHT = 720
 SHORT_VIDEO_DURATION = 120
 MEDIUM_VIDEO_DURATION = 600
-HIGH_COMPLEXITY_THRESHOLD = 0.8
-MEDIUM_COMPLEXITY_THRESHOLD = 0.6
-LOW_COMPLEXITY_THRESHOLD = 0.3
-HIGH_GRAIN_THRESHOLD = 0.7
-SSIM_THRESHOLD_VERY_HIGH = 0.95
-SSIM_THRESHOLD_HIGH = 0.92
-SSIM_THRESHOLD_MEDIUM = 0.90
 
 # Simple module-level caches
 _file_cache: dict[Path, dict[str, Any]] = {}
@@ -61,30 +50,6 @@ class VideoComplexity:
     overall_complexity: float  # 0.0 to 1.0
 
 
-@dataclass
-class CRFCalculationParams:
-    """Parameters for CRF calculation to reduce function arguments."""
-
-    file_path: Path
-    video_info: dict[str, Any]
-    complexity: VideoComplexity
-    folder_quality: float | None = None
-    force_preset: str | None = None
-    force_crf: int | None = None
-
-
-@dataclass
-class QuickTestParams:
-    """Parameters for quick test encoding to reduce function arguments."""
-
-    file_path: Path
-    test_crf: int
-    test_duration: int
-    gpu: bool = False
-    codec: str = "libx265"
-    speed_preset: str = "medium"
-
-
 def analyze_file(file_path: Path, *, use_cache: bool = True) -> dict[str, Any]:
     """Get video analysis for a single file with caching."""
     if use_cache and file_path in _file_cache:
@@ -93,7 +58,6 @@ def analyze_file(file_path: Path, *, use_cache: bool = True) -> dict[str, Any]:
     try:
         video_info = FFmpegProbe.get_video_info(file_path)
         complexity = estimate_complexity(file_path, video_info)
-        estimated_ssim = estimate_ssim_threshold(video_info, complexity)
 
         analysis = {
             "duration": video_info["duration"],
@@ -104,7 +68,6 @@ def analyze_file(file_path: Path, *, use_cache: bool = True) -> dict[str, Any]:
             "bitrate": int(video_info["bitrate"]) if video_info["bitrate"] else None,
             "fps": video_info.get("fps"),
             "complexity": complexity,
-            "estimated_ssim_threshold": estimated_ssim,
         }
 
         if use_cache:
@@ -121,7 +84,6 @@ def analyze_file(file_path: Path, *, use_cache: bool = True) -> dict[str, Any]:
             "bitrate": None,
             "fps": 25.0,
             "complexity": VideoComplexity(0.5, 0.5, 0.5, 0.5),
-            "estimated_ssim_threshold": 0.92,  # Conservative default
         }
         if use_cache:
             _file_cache[file_path] = analysis
@@ -246,41 +208,6 @@ def _extract_sample_frames(file_path: Path, sample_times: list[float]) -> list[n
     return frames
 
 
-def estimate_ssim_threshold(video_info: dict[str, Any], complexity: VideoComplexity) -> float:
-    """Estimate appropriate SSIM threshold based on content complexity and quality."""
-    try:
-        # Base SSIM threshold
-        base_threshold = 0.92
-
-        # Adjust based on complexity
-        if complexity.overall_complexity > HIGH_COMPLEXITY_THRESHOLD:
-            # Very complex content (action scenes) - more permissive
-            base_threshold = 0.88
-        elif complexity.overall_complexity > MEDIUM_COMPLEXITY_THRESHOLD:
-            # Medium complexity - slightly more permissive
-            base_threshold = 0.90
-        elif complexity.overall_complexity < LOW_COMPLEXITY_THRESHOLD:
-            # Simple content (talking heads) - can be more strict
-            base_threshold = 0.95
-
-        # Adjust based on resolution
-        height = video_info.get("height", 1080)
-        if height >= FOUR_K_HEIGHT:  # 4K
-            base_threshold -= 0.02  # Slightly more permissive for 4K
-        elif height <= HD_HEIGHT:  # HD or lower
-            base_threshold += 0.01  # Slightly more strict for lower res
-
-        # Adjust based on grain content
-        if complexity.grain_score > HIGH_GRAIN_THRESHOLD:
-            base_threshold -= 0.03  # More permissive for grainy content
-
-        # Clamp to reasonable range
-        return max(0.85, min(0.98, base_threshold))
-
-    except (OSError, ValueError, RuntimeError):
-        return 0.92  # Safe default
-
-
 def analyze_folder_quality(folder: Path, video_files: list[Path], sample_percentage: float = 0.2) -> float:
     """Analyze folder quality using conservative sampling."""
     if folder in _folder_quality_cache:
@@ -314,24 +241,25 @@ def analyze_folder_quality(folder: Path, video_files: list[Path], sample_percent
 
     # Analyze samples
     complexity_scores = []
-    ssim_thresholds = []
 
     for file_path in samples:
         try:
             analysis = analyze_file(file_path, use_cache=True)
             complexity_scores.append(analysis["complexity"].overall_complexity)
-            ssim_thresholds.append(analysis["estimated_ssim_threshold"])
         except (OSError, ValueError, RuntimeError):
             continue
 
-    # Use most conservative (lowest) SSIM threshold from samples
-    folder_threshold = min(ssim_thresholds) if ssim_thresholds else 0.92
+    # Use conservative SSIM threshold based on average complexity
+    avg_complexity = sum(complexity_scores) / len(complexity_scores) if complexity_scores else 0.5
+    # Higher complexity = lower SSIM threshold (more conservative)
+    folder_threshold = 0.95 - (avg_complexity * 0.05)  # Range: 0.90-0.95
 
     LOG.debug(
-        "Folder %s SSIM threshold: %.3f (%d samples from %d files)",
+        "Folder %s SSIM threshold: %.3f (avg complexity: %.3f, %d samples from %d files)",
         folder.name,
         folder_threshold,
-        len(ssim_thresholds),
+        avg_complexity,
+        len(complexity_scores),
         total_files,
     )
 
@@ -339,205 +267,14 @@ def analyze_folder_quality(folder: Path, video_files: list[Path], sample_percent
     return folder_threshold
 
 
-def calculate_optimal_crf(  # noqa: C901, PLR0912, PLR0913, PLR0915
-    file_path: Path,
-    video_info: dict[str, Any],
-    complexity: VideoComplexity,
-    folder_quality: float | None = None,
-    force_preset: str | None = None,
-    force_crf: int | None = None,
-) -> QualityDecision:
-    """
-    Calculate optimal CRF value based on content analysis and target SSIM.
-
-    Uses lookup tables and content analysis for fast parameter selection.
-
-    Args:
-        file_path: Path to the video file being analyzed
-        video_info: Video metadata from FFprobe
-        complexity: Video complexity analysis result
-        folder_quality: Optional folder-wide quality threshold
-        force_preset: Override automatic preset selection
-        force_crf: Override automatic CRF calculation
-
-    """
-    try:
-        # Use folder quality if provided, otherwise calculate from file
-        if folder_quality is not None:
-            effective_target = folder_quality
-        else:
-            effective_target = estimate_ssim_threshold(video_info, complexity)
-
-        # Check if source is already heavily compressed
-        source_bitrate = video_info.get("bitrate", 0) or 0
-        source_bitrate = int(source_bitrate) if source_bitrate else 0
-
-        # Define expected bitrates by resolution for well-compressed content
-        height = video_info.get("height", 1080)
-        expected_bitrates = {
-            480: 1_500_000,  # 1.5 Mbps
-            720: 3_000_000,  # 3 Mbps
-            1080: 6_000_000,  # 6 Mbps
-            1440: 12_000_000,  # 12 Mbps
-            2160: 25_000_000,  # 25 Mbps
-        }
-
-        # Find expected bitrate for this resolution
-        expected_bitrate = 25_000_000  # Default for very high res
-        for res, bitrate in sorted(expected_bitrates.items()):
-            if height <= res:
-                expected_bitrate = bitrate
-                break
-
-        # Adjust CRF based on source compression level
-        is_heavily_compressed = source_bitrate > 0 and source_bitrate < expected_bitrate * 0.7
-
-        # CRF lookup table based on complexity and target SSIM
-        # Preset configs now handle GPU-specific CRF values
-        crf_adjustment = 0
-
-        if height >= FOUR_K_HEIGHT:  # 4K
-            if is_heavily_compressed:
-                crf_lookup = {
-                    (0.0, 0.3): (32 + crf_adjustment, 28 + crf_adjustment, 26 + crf_adjustment, 22 + crf_adjustment),
-                    (0.3, 0.6): (30 + crf_adjustment, 26 + crf_adjustment, 24 + crf_adjustment, 20 + crf_adjustment),
-                    (0.6, 1.0): (28 + crf_adjustment, 24 + crf_adjustment, 22 + crf_adjustment, 18 + crf_adjustment),
-                }
-            else:
-                crf_lookup = {
-                    (0.0, 0.3): (28 + crf_adjustment, 24 + crf_adjustment, 22 + crf_adjustment, 18 + crf_adjustment),
-                    (0.3, 0.6): (26 + crf_adjustment, 22 + crf_adjustment, 20 + crf_adjustment, 16 + crf_adjustment),
-                    (0.6, 1.0): (24 + crf_adjustment, 20 + crf_adjustment, 18 + crf_adjustment, 14 + crf_adjustment),
-                }
-            preset = "slow"  # 4K benefits from slower preset
-        elif height >= TWO_K_HEIGHT:  # 1440p
-            if is_heavily_compressed:
-                crf_lookup = {
-                    (0.0, 0.3): (30 + crf_adjustment, 26 + crf_adjustment, 24 + crf_adjustment, 20 + crf_adjustment),
-                    (0.3, 0.6): (28 + crf_adjustment, 24 + crf_adjustment, 22 + crf_adjustment, 18 + crf_adjustment),
-                    (0.6, 1.0): (26 + crf_adjustment, 22 + crf_adjustment, 20 + crf_adjustment, 16 + crf_adjustment),
-                }
-            else:
-                crf_lookup = {
-                    (0.0, 0.3): (26 + crf_adjustment, 22 + crf_adjustment, 20 + crf_adjustment, 16 + crf_adjustment),
-                    (0.3, 0.6): (24 + crf_adjustment, 20 + crf_adjustment, 18 + crf_adjustment, 14 + crf_adjustment),
-                    (0.6, 1.0): (22 + crf_adjustment, 18 + crf_adjustment, 16 + crf_adjustment, 12 + crf_adjustment),
-                }
-            preset = "medium"
-        elif height >= FULL_HD_HEIGHT:  # 1080p
-            if is_heavily_compressed:
-                crf_lookup = {
-                    (0.0, 0.3): (29 + crf_adjustment, 25 + crf_adjustment, 23 + crf_adjustment, 19 + crf_adjustment),
-                    (0.3, 0.6): (27 + crf_adjustment, 23 + crf_adjustment, 21 + crf_adjustment, 17 + crf_adjustment),
-                    (0.6, 1.0): (25 + crf_adjustment, 21 + crf_adjustment, 19 + crf_adjustment, 15 + crf_adjustment),
-                }
-            else:
-                crf_lookup = {
-                    (0.0, 0.3): (25 + crf_adjustment, 21 + crf_adjustment, 19 + crf_adjustment, 15 + crf_adjustment),
-                    (0.3, 0.6): (23 + crf_adjustment, 19 + crf_adjustment, 17 + crf_adjustment, 13 + crf_adjustment),
-                    (0.6, 1.0): (21 + crf_adjustment, 17 + crf_adjustment, 15 + crf_adjustment, 11 + crf_adjustment),
-                }
-            preset = "medium"
-        else:  # 720p and below
-            if is_heavily_compressed:
-                crf_lookup = {
-                    (0.0, 0.3): (28 + crf_adjustment, 24 + crf_adjustment, 22 + crf_adjustment, 18 + crf_adjustment),
-                    (0.3, 0.6): (26 + crf_adjustment, 22 + crf_adjustment, 20 + crf_adjustment, 16 + crf_adjustment),
-                    (0.6, 1.0): (24 + crf_adjustment, 20 + crf_adjustment, 18 + crf_adjustment, 14 + crf_adjustment),
-                }
-            else:
-                crf_lookup = {
-                    (0.0, 0.3): (24 + crf_adjustment, 20 + crf_adjustment, 18 + crf_adjustment, 14 + crf_adjustment),
-                    (0.3, 0.6): (22 + crf_adjustment, 18 + crf_adjustment, 16 + crf_adjustment, 12 + crf_adjustment),
-                    (0.6, 1.0): (20 + crf_adjustment, 16 + crf_adjustment, 14 + crf_adjustment, 10 + crf_adjustment),
-                }
-            preset = "fast"  # Lower resolution can use faster preset
-
-        # Check if this is a GPU preset by looking at force_preset
-        is_gpu_preset = force_preset and any(
-            marker in force_preset.lower() for marker in ["gpu", "nvenc", "amf", "qsv"]
-        )
-
-        # Use forced CRF if provided, otherwise calculate
-        if force_crf is not None:
-            selected_crf = force_crf
-        elif is_gpu_preset:
-            # For GPU presets, be more conservative with CRF adjustments
-            # Start with a higher baseline since GPU encoders are less efficient
-            selected_crf = 28  # Conservative GPU default
-
-            # Only make small adjustments for complexity
-            complexity_val = complexity.overall_complexity
-            if complexity_val > HIGH_COMPLEXITY_THRESHOLD:  # Very high complexity
-                selected_crf = max(24, selected_crf - 2)
-            elif complexity_val > MEDIUM_COMPLEXITY_THRESHOLD:  # Medium-high complexity
-                selected_crf = max(26, selected_crf - 1)
-            elif complexity_val < LOW_COMPLEXITY_THRESHOLD:  # Low complexity
-                selected_crf = min(32, selected_crf + 2)
-
-            # Minimal adjustment for grain (GPU encoders don't handle grain as well)
-            if complexity.grain_score > HIGH_GRAIN_THRESHOLD:
-                selected_crf = max(22, selected_crf - 1)
-        else:
-            # Standard CPU encoder CRF calculation
-            complexity_val = complexity.overall_complexity
-            selected_crf = 23  # Safe default
-
-            for (min_c, max_c), crfs in crf_lookup.items():
-                if min_c <= complexity_val < max_c:
-                    # Select CRF based on target SSIM
-                    if effective_target >= SSIM_THRESHOLD_VERY_HIGH:
-                        selected_crf = crfs[3]
-                    elif effective_target >= SSIM_THRESHOLD_HIGH:
-                        selected_crf = crfs[2]
-                    elif effective_target >= SSIM_THRESHOLD_MEDIUM:
-                        selected_crf = crfs[1]
-                    else:
-                        selected_crf = crfs[0]
-                    break
-
-            # Adjust for grain content
-            if complexity.grain_score > HIGH_GRAIN_THRESHOLD:
-                selected_crf = max(10, selected_crf - 2)  # Lower CRF for grainy content
-
-        # Use forced preset if provided, otherwise use calculated preset
-        if force_preset is not None:
-            preset = force_preset
-
-        # Determine limitation reason
-        limitation_reason = None
-        if complexity.overall_complexity > HIGH_COMPLEXITY_THRESHOLD:
-            limitation_reason = "High complexity content requires lower CRF"
-        elif complexity.grain_score > HIGH_GRAIN_THRESHOLD:
-            limitation_reason = "Grainy content requires lower CRF"
-        elif height >= FOUR_K_HEIGHT:
-            limitation_reason = "4K resolution requires optimized settings"
-
-        return QualityDecision(
-            effective_crf=selected_crf,
-            effective_preset=preset,
-            limitation_reason=limitation_reason,
-            predicted_ssim=effective_target,
-        )
-
-    except (OSError, ValueError, RuntimeError) as e:
-        LOG.warning("Failed to calculate optimal CRF for %s: %s", file_path, e)
-        return QualityDecision(
-            effective_crf=23,
-            effective_preset="medium",
-            limitation_reason="Fallback due to analysis error",
-            predicted_ssim=0.92,
-        )
-
-
 def validate_quality_fast(original_path: Path, encoded_path: Path, sample_count: int = 5) -> float:
     """
-    Fast SSIM validation using strategic frame sampling.
+    Fast SSIM validation using 5-second intervals throughout the video.
 
     Args:
         original_path: Original video file
         encoded_path: Encoded video file
-        sample_count: Number of frames to sample for comparison
+        sample_count: Number of 5-second intervals to sample
 
     Returns:
         Average SSIM score
@@ -551,11 +288,24 @@ def validate_quality_fast(original_path: Path, encoded_path: Path, sample_count:
         if duration <= 0:
             return 0.5  # Unknown quality
 
-        # Generate sample times
+        # Generate sample times at 5-second intervals
         sample_times = []
-        for i in range(sample_count):
-            time_point = duration * (0.1 + 0.8 * i / (sample_count - 1))  # Sample from 10% to 90%
-            sample_times.append(time_point)
+        interval = 5.0  # 5 seconds
+
+        # Calculate how many 5-second intervals we can fit
+        max_intervals = int(duration // interval)
+        if max_intervals == 0:
+            # Video is shorter than 5 seconds, sample at the middle
+            sample_times = [duration / 2]
+        else:
+            # Sample evenly distributed 5-second intervals
+            actual_count = min(sample_count, max_intervals)
+            for i in range(actual_count):
+                # Distribute intervals evenly across video duration
+                position = (i * duration) / actual_count
+                # Round to nearest 5-second mark
+                position = round(position / interval) * interval
+                sample_times.append(position)
 
         # Extract frames from both videos
         original_frames = _extract_sample_frames(original_path, sample_times)
