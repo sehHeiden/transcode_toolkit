@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Main entry point for the transcode toolkit package."""
 
 import sys
