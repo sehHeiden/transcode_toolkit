@@ -8,14 +8,8 @@ on:
 
 jobs:
   test:
-    name: Test on ${{ matrix.os }} with Python ${{ matrix.python-version }}
-    runs-on: ${{ matrix.os }}
-    
-    strategy:
-      matrix:
-        os: [ubuntu-latest]
-        python-version: ['3.12']
-      fail-fast: false
+    name: Test and Quality Check
+    runs-on: ubuntu-latest
     
     steps:
     - name: Checkout code
@@ -27,97 +21,34 @@ jobs:
         version: "latest"
     
     - name: Set up Python
-      run: uv python install ${{ matrix.python-version }}
+      run: uv python install 3.12
     
     - name: Install dependencies
       run: uv sync --frozen
     
-    - name: Install FFmpeg
-      run: |
-        sudo apt update
-        sudo apt install -y ffmpeg
-    
     - name: Run linting with ruff
-      run: |
-        uv run ruff check src/ tests/
-      continue-on-error: true
+      run: uv run ruff check src/ tests/
     
     - name: Run type checking with mypy
-      run: |
-        uv run mypy src/
-      continue-on-error: true
+      run: uv run mypy src/
     
     - name: Run tests with coverage
       run: |
-        uv run pytest tests/ --cov=src --cov-report=term-missing --cov-report=html --cov-report=xml
+        uv run pytest tests/ --cov=src --cov-report=term-missing --cov-report=xml
     
-    - name: Upload coverage reports
-      uses: actions/upload-artifact@v4
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v4
       if: always()
       with:
-        name: coverage-reports
-        path: |
-          htmlcov/
-          coverage.xml
-    
-    - name: Generate coverage badge and summary
-      run: |
-        # Extract coverage percentage
-        COVERAGE_NUM=$(python -c "import xml.etree.ElementTree as ET; tree = ET.parse('coverage.xml'); root = tree.getroot(); print(f'{float(root.attrib[\"line-rate\"]) * 100:.0f}')")
-        COVERAGE_PERCENT="${COVERAGE_NUM}%"
-        
-        # Determine badge color based on coverage
-        if [ "$COVERAGE_NUM" -ge 80 ]; then
-          COLOR="brightgreen"
-        elif [ "$COVERAGE_NUM" -ge 60 ]; then
-          COLOR="yellow"
-        elif [ "$COVERAGE_NUM" -ge 40 ]; then
-          COLOR="orange"
-        else
-          COLOR="red"
-        fi
-        
-        # Create coverage badge JSON
-        mkdir -p badges
-        cat > badges/coverage.json << EOF
-        {
-          "schemaVersion": 1,
-          "label": "coverage",
-          "message": "$COVERAGE_PERCENT",
-          "color": "$COLOR"
-        }
-        EOF
-        
-        # Output to step summary
-        echo "## 📊 Coverage Report" >> $GITHUB_STEP_SUMMARY
-        echo "Current coverage: **$COVERAGE_PERCENT**" >> $GITHUB_STEP_SUMMARY
-        echo "Badge color: $COLOR" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "📁 [View detailed HTML report in artifacts](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> $GITHUB_STEP_SUMMARY
-        
-        # Save coverage info for potential badge update
-        echo "COVERAGE_PERCENT=$COVERAGE_PERCENT" >> $GITHUB_ENV
-        echo "COVERAGE_COLOR=$COLOR" >> $GITHUB_ENV
-    
-    - name: Commit coverage badge
-      if: github.ref == 'refs/heads/main'
-      run: |
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-        
-        # Only commit if badge file changed
-        if ! git diff --quiet badges/coverage.json 2>/dev/null; then
-          mkdir -p .github/badges
-          cp badges/coverage.json .github/badges/coverage.json
-          git add .github/badges/coverage.json
-          git commit -m "Update coverage badge: $COVERAGE_PERCENT"
-          git push
-        fi
+        file: ./coverage.xml
+        fail_ci_if_error: false
+        verbose: true
 
   build:
     name: Build package
     runs-on: ubuntu-latest
     needs: test
+    if: github.ref == 'refs/heads/main'
     
     steps:
     - name: Checkout code
@@ -128,9 +59,6 @@ jobs:
     
     - name: Set up Python
       run: uv python install 3.12
-    
-    - name: Install dependencies
-      run: uv sync --frozen
     
     - name: Build package
       run: uv build
