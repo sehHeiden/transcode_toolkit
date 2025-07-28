@@ -45,8 +45,8 @@ def test_audio_estimate_populated_dir(
     mock_compare: MagicMock, mock_recommend: MagicMock, mock_print_comparison: MagicMock, populated_dir: Path
 ) -> None:
     """Test audio estimate on a populated directory should show analysis results."""
-    from src.transcode_toolkit.cli.main import MediaToolkitCLI
     from src.transcode_toolkit.audio.estimate import EstimationResult
+    from src.transcode_toolkit.cli.main import MediaToolkitCLI
 
     # Mock the estimation results for audio files
     mock_results = [
@@ -59,13 +59,13 @@ def test_audio_estimate_populated_dir(
         ),
         EstimationResult(
             preset="music",
-            current_size=10 * 1024 * 1024,  # 10MB  
+            current_size=10 * 1024 * 1024,  # 10MB
             estimated_size=8 * 1024 * 1024,  # 8MB
             saving=2 * 1024 * 1024,  # 2MB
             saving_percent=20.0,
         ),
     ]
-    
+
     mock_compare.return_value = mock_results
     mock_recommend.return_value = "audiobook"
 

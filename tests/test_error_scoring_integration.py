@@ -59,10 +59,10 @@ def test_corrupted_media_file_handling() -> None:
             # Mock video comparison and printing to avoid Unicode issues
             with patch("src.transcode_toolkit.core.unified_estimate.compare_video_presets") as mock_compare:
                 mock_compare.return_value = []
-                
+
                 with patch("src.transcode_toolkit.core.unified_estimate.print_video_comparison") as mock_print:
                     mock_print.return_value = None
-                    
+
                     with patch("pathlib.Path.exists", return_value=True):
                         # Create proper mock stat object for file size calculations
                         mock_stat_result = Mock()
@@ -285,7 +285,7 @@ def test_batch_processing_mixed_formats(tmp_path: Path) -> None:
                 # This tests that the system gracefully handles mixed success/failure scenarios
                 audio_analyses = [r for r in results if r.file_type == "audio"]
                 assert len(audio_analyses) == len(audio_files), "All audio files should be analyzed"
-                
+
                 # Video files will have failed analysis due to dummy content, which is expected
                 # This verifies graceful error handling for unprocessable video files
                 assert len(results) >= len(audio_files), "Should at least process all audio files"
@@ -412,7 +412,7 @@ def test_directory_with_unreadable_files(tmp_path: Path) -> None:
     with patch("src.transcode_toolkit.core.unified_estimate.get_media_files") as mock_get_files:
         mock_get_files.return_value = ([readable_file, unreadable_file], [])
 
-        def analyze_side_effect(file_path: Path, *, use_cache: bool = True) -> dict:
+        def analyze_side_effect(file_path: Path, *, use_cache: bool = True) -> dict:  # noqa: ARG001
             if file_path == unreadable_file:
                 access_denied_msg = "Access denied"
                 raise PermissionError(access_denied_msg)
@@ -439,16 +439,16 @@ def test_directory_with_unreadable_files(tmp_path: Path) -> None:
             patch("src.transcode_toolkit.core.unified_estimate.recommend_video_preset", return_value="default"),
             patch("src.transcode_toolkit.core.unified_estimate.print_video_comparison"),
         ):
-            # Create mock stat result for readable files  
+            # Create mock stat result for readable files
             readable_stat = Mock()
             readable_stat.st_size = 1024 * 1024
             readable_stat.st_mtime = 1234567890
-            
+
             # Create a more targeted approach: mock just the global Path.stat
             # to handle all stat calls uniformly
             with patch("pathlib.Path.stat", return_value=readable_stat):
                 mock_probe.return_value = {"codec": "h264"}
-                
+
                 results, _ = analyze_directory(tmp_path)
 
                 # The core behavior being tested is that analyze_file raises PermissionError
