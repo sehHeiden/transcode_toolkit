@@ -2,6 +2,7 @@
 
 import csv
 import logging
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
@@ -16,7 +17,7 @@ else:
 
 from tqdm import tqdm
 
-from . import ConfigManager, FFmpegProbe, VideoComplexity
+from . import ConfigManager, FFmpegError, FFmpegProbe, VideoComplexity
 from .video_analysis import analyze_file
 
 # Weighted scoring configuration
@@ -342,6 +343,7 @@ def _calculate_ssim_for_preset(
         Measured SSIM value from actual test encode between 0.0 and 1.0
 
     """
+    from .ffmpeg import FFmpegError
     from .video_analysis import quick_test_encode
 
     try:
@@ -353,7 +355,7 @@ def _calculate_ssim_for_preset(
         # Determine if this is a GPU preset
         gpu = any(marker in codec.lower() for marker in ["nvenc", "amf", "qsv"])
 
-        # Perform 5-second test encode to get actual SSIM
+        # Perform 5-second test encode to get actual SSIM (with fast timeouts)
         encoded_path, measured_ssim, speed_metrics = quick_test_encode(
             file_path=file_path,
             test_crf=crf,
@@ -370,19 +372,34 @@ def _calculate_ssim_for_preset(
         # Return the measured SSIM, ensuring it's within reasonable bounds
         return max(0.70, min(0.99, measured_ssim))
 
+    except FFmpegError as e:
+        # Check if this is a timeout error
+        if isinstance(e.__cause__, subprocess.TimeoutExpired):
+            LOG.warning(
+                "Preset '%s' with codec '%s' and speed '%s' timed out during test encode - skipping this preset",
+                getattr(preset_config, "name", "unknown"),
+                codec,
+                speed_preset,
+            )
+            # Return NaN to indicate this preset should be excluded
+            return float("nan")
+        # Other FFmpeg errors, log and use fallback
+        LOG.warning("FFmpeg error during test encode for %s: %s", file_path, e)
+        # Fall through to fallback calculation
     except (OSError, ValueError, RuntimeError) as e:
         LOG.warning("Failed to perform test encode for SSIM measurement on %s: %s", file_path, e)
+        # Fall through to fallback calculation
 
-        # Fallback to formula-based calculation only if test encode fails
-        crf = getattr(preset_config, "crf", 24)
-        base_ssim = max(0.80, min(0.99, 0.98 - (crf - 18) * 0.01))
+    # Fallback to formula-based calculation only if test encode fails
+    crf = getattr(preset_config, "crf", 24)
+    base_ssim = max(0.80, min(0.99, 0.98 - (crf - 18) * 0.01))
 
-        # Apply complexity adjustment if available
-        if complexity:
-            complexity_factor = 1.0 - (complexity.overall_complexity * 0.05)
-            base_ssim *= complexity_factor
+    # Apply complexity adjustment if available
+    if complexity:
+        complexity_factor = 1.0 - (complexity.overall_complexity * 0.05)
+        base_ssim *= complexity_factor
 
-        return max(0.70, min(0.99, base_ssim))
+    return max(0.70, min(0.99, base_ssim))
 
 
 def _calculate_processing_time(current_mb: float, preset_config: object) -> float:
@@ -505,7 +522,7 @@ def process_video_files(
                 alternatives=[],
             )
             analyses.append(analysis)
-        except (OSError, ValueError, RuntimeError) as e:
+        except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired, FFmpegError) as e:
             LOG.warning("Failed to analyze %s: %s", video_file, e)
         finally:
             if progress_bar:
@@ -839,7 +856,7 @@ def compare_video_presets(video_files: list[Path]) -> list[EstimationResult]:
         # Get source codec from first video
         video_info = FFmpegProbe.get_video_info(video_files[0])
         source_codec = video_info.get("codec")
-    except (OSError, ValueError, RuntimeError) as e:
+    except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired, FFmpegError) as e:
         LOG.warning("Failed to analyze video complexity or codec: %s", e)
         complexity = None
         source_codec = None
@@ -868,9 +885,16 @@ def compare_video_presets(video_files: list[Path]) -> list[EstimationResult]:
         try:
             video_analysis = analyze_file(video_files[0], use_cache=True)
             estimated_ssim = _calculate_ssim_for_preset(preset_config, video_files[0], complexity)
-        except (OSError, ValueError, RuntimeError):
+        except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired, FFmpegError):
             # Fallback to dynamic SSIM calculation if frame analysis fails
             estimated_ssim = _calculate_ssim_for_preset(preset_config, video_files[0], complexity)
+
+        # Skip presets that timed out (NaN SSIM)
+        import math
+
+        if math.isnan(estimated_ssim):
+            LOG.debug("Skipping preset '%s' due to timeout during test encode", preset_name)
+            continue
 
         # Group similar presets by codec and quality level
         codec_key = preset_config.codec

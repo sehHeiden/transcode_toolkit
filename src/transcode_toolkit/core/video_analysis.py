@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 import tempfile
 import time
 from dataclasses import dataclass
@@ -13,7 +14,7 @@ import cv2
 import numpy as np
 from skimage.metrics import structural_similarity as ssim
 
-from .ffmpeg import FFmpegProbe, FFmpegProcessor
+from .ffmpeg import FFmpegError, FFmpegProbe, FFmpegProcessor
 
 LOG = logging.getLogger(__name__)
 
@@ -72,7 +73,7 @@ def analyze_file(file_path: Path, *, use_cache: bool = True) -> dict[str, Any]:
 
         if use_cache:
             _file_cache[file_path] = analysis
-    except (OSError, RuntimeError, ValueError) as e:
+    except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired, FFmpegError) as e:
         LOG.warning("Failed to analyze %s: %s", file_path, e)
         # Return minimal analysis with defaults
         analysis = {
@@ -344,7 +345,7 @@ def validate_quality_fast(original_path: Path, encoded_path: Path, sample_count:
         return 0.5
 
 
-def quick_test_encode(  # noqa: PLR0913, PLR0915, C901, PLR0912
+def quick_test_encode(  # noqa: PLR0913, PLR0915
     file_path: Path,
     test_crf: int,
     test_duration: int = 30,
@@ -355,6 +356,8 @@ def quick_test_encode(  # noqa: PLR0913, PLR0915, C901, PLR0912
 ) -> tuple[Path | None, float, dict[str, float]]:
     """
     Unified test encode that measures both SSIM quality and encoding speed.
+
+    Uses optimized fast timeouts for better user experience.
 
     Args:
         file_path: Source video file
@@ -395,27 +398,11 @@ def quick_test_encode(  # noqa: PLR0913, PLR0915, C901, PLR0912
             encoded_path = Path(temp_encoded.name)
 
         try:
-            # Calculate dynamic timeout based on codec and preset
-            # AV1 with slower preset can take much longer
-            base_timeout = 60
-            if codec == "libaom-av1":
-                if speed_preset in ["veryslow", "slower"]:
-                    base_timeout = 600  # 10 minutes for very slow AV1
-                elif speed_preset in ["slow", "medium"]:
-                    base_timeout = 300  # 5 minutes for moderate AV1
-                else:
-                    base_timeout = 180  # 3 minutes for faster AV1
-            elif codec in ["libx265", "libhevc"]:
-                # 5 min for slow HEVC, 2 min for normal
-                base_timeout = 300 if speed_preset in ["veryslow", "slower", "slow"] else 120
-            elif codec in ["libvpx-vp9"]:
-                base_timeout = 240  # 4 minutes for VP9
-            else:
-                base_timeout = 120  # 2 minutes for other codecs
+            # Ultra-fast timeouts - maximum 10 seconds for any codec/preset combination
+            max_timeout = 10  # Hard limit of 10 seconds
 
-            # Scale timeout based on test duration
-            timeout_multiplier = max(1.0, test_duration / 10.0)  # Scale for longer test segments
-            dynamic_timeout = int(base_timeout * timeout_multiplier)
+            # For very slow codecs, still keep the 10-second limit
+            dynamic_timeout = max_timeout
 
             # Extract test segment
             ffmpeg = FFmpegProcessor(timeout=dynamic_timeout)
