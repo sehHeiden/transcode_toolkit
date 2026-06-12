@@ -1,0 +1,16 @@
+version: '3'
+
+tasks:
+  check:
+    desc: Lint + typecheck + test
+    cmds:
+      - uv run ruff check src/ tests/
+      - uv run ruff format --check src/ tests/
+      - uv run ty check src/
+      - uv run pytest tests/ -v
+
+  fix:
+    desc: Auto-fix lint + format
+    cmds:
+      - uv run ruff check --fix src/ tests/
+      - uv run ruff format src/ tests/

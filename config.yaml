@@ -1,50 +1,5 @@
-# Media Toolkit Configuration
-# This file contains all presets and settings for audio and video transcoding
-
 audio:
-  # Size reduction ratio threshold - keep re-encode only if ≥ 5% smaller
   size_keep_ratio: 0.95
-  
-  # Quality analysis settings (user configurable)
-  quality_thresholds:
-    small_folder_files: 3        # Files ≤ this = analyze all
-    medium_folder_files: 20      # Files ≤ this = skip first/last
-    min_saving_percent: 5        # Don't convert if savings < this %
-    
-  # SNR sampling configuration
-  sampling:
-    edge_skip_percent: 10        # Skip this % from folder edges
-    min_sample_count: 5          # Minimum samples in large folders
-    sample_percentage: 0.2       # Sample this % of files (20%)
-    
-  # Codec quality estimates (user can adjust based on preferences)
-  codec_snr_estimates:
-    mp3:
-      high_quality_bitrate: 320000
-      good_quality_bitrate: 192000
-      standard_quality_bitrate: 128000
-      high_snr: 85.0
-      good_snr: 75.0
-      standard_snr: 65.0
-      low_snr: 55.0
-    aac:
-      high_quality_bitrate: 256000
-      good_quality_bitrate: 128000
-      standard_quality_bitrate: 96000
-      high_snr: 80.0
-      good_snr: 70.0
-      standard_snr: 60.0
-      low_snr: 50.0
-    opus:
-      high_quality_bitrate: 192000
-      good_quality_bitrate: 128000
-      standard_quality_bitrate: 96000
-      high_snr: 85.0
-      good_snr: 75.0
-      standard_snr: 65.0
-      low_snr: 55.0
-  
-  # Supported audio file extensions
   extensions:
     - .flac
     - .mp3
@@ -54,101 +9,45 @@ audio:
     - .ogg
     - .opus
     - .wma
-    - .aax
-
-  # Audio encoding presets
   presets:
     music:
       bitrate: "128k"
       application: "audio"
-      cutoff: null
-      channels: null
-      description: "Standard music quality"
-      min_snr_db: 70.0               # Minimum SNR for full bitrate
-      snr_bitrate_scale: true        # Enable SNR scaling
-    
+      min_snr_db: 70.0
+      snr_bitrate_scale: true
     audiobook:
       bitrate: "64k"
-      application: "voip"     # Optimized for speech
-      cutoff: null           # No frequency cutoff - preserve full range
-      channels: "1"          # Mono for most audiobooks
-      description: "High quality mono audiobooks"
-      min_snr_db: 50.0       # Lower threshold for voice content
-      snr_bitrate_scale: true
-    
-    audiobook_stereo:
-      bitrate: "96k"          # Better quality for stereo (upgraded from 48k)
       application: "voip"
-      cutoff: null           # No frequency cutoff - preserve full range
-      channels: null         # Keep original channels
-      description: "High quality stereo audiobooks"
-      min_snr_db: 50.0       # Lower threshold for voice content
+      channels: 1
+      min_snr_db: 50.0
       snr_bitrate_scale: true
-    
+    audiobook_stereo:
+      bitrate: "96k"
+      application: "voip"
+      min_snr_db: 50.0
+      snr_bitrate_scale: true
     high:
       bitrate: "192k"
       application: "audio"
-      cutoff: null
-      channels: null
-      description: "High quality music"
-      min_snr_db: 75.0       # Higher threshold for high quality
+      min_snr_db: 75.0
       snr_bitrate_scale: true
-    
     low:
       bitrate: "96k"
       application: "audio"
-      cutoff: null
-      channels: null
-      description: "Lower quality for space saving"
-      min_snr_db: 60.0       # Moderate threshold for low quality preset
+      min_snr_db: 60.0
       snr_bitrate_scale: true
 
 video:
-  # Video processing settings
-  min_savings_percent: 10  # Minimum savings percentage required to keep transcoded file
-  size_keep_ratio: 0.95    # Keep transcoded file if new size < (original * ratio)
-  
-  # Supported video file extensions
+  min_savings_percent: 10
+  size_keep_ratio: 0.95
   extensions:
     - .mp4
     - .mkv
     - .avi
     - .mov
     - .wmv
-    - .flv
     - .webm
-    - .m4v
 
-  # DYNAMIC CODEC MATRIX - automatically generates all codec/preset combinations
-  # This creates presets like: h265_balanced, av1_fast, gpu_high, etc.
-  # The system tests codec availability at runtime and only shows working presets
-  codecs: ["libx265", "libaom-av1", "libsvtav1", "librav1e", "libvvenc", "hevc_nvenc", "hevc_amf", "hevc_qsv"]
-  
-  # Base CRF values for each codec
-  crf_base: {"libx265": 24, "libaom-av1": 30, "libsvtav1": 32, "librav1e": 34, "libvvenc": 37, "hevc_nvenc": 22, "hevc_amf": 24, "hevc_qsv": 24}
-  
-  
-  # Available CRF offsets - any combination with any speed
-  crf_offsets: [-4, -2, 0, 2, 4, 6, 8, 10,]
-  
-  # Available FFmpeg speed presets - any combination with any CRF
-  speed_options: ["slower", "slow", "medium", "fast", "faster"]
-  
-
-# Global settings
 global:
-  # Default number of worker threads (null = auto-detect with thermal-safe limits)
-  # Auto-detection uses psutil to monitor system load and temperature,
-  # ensuring we don't use too many cores that could cause thermal issues
-  # For thermal safety, auto-detection caps at 4 workers and uses half the physical cores
-  default_workers: null
-  
-  # Logging levels: DEBUG, INFO, WARNING, ERROR
-  log_level: "INFO"
-  
-  # Create backup files before replacing originals
+  workers: null
   create_backups: true
-  
-  # Remove backup files after successful conversion
-  # Options: "never", "on_success"
-  cleanup_backups: "on_success"

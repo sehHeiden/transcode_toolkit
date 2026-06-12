@@ -1,8 +1,3 @@
-"""Main entry point for the transcode toolkit package."""
+from transcode_toolkit.cli import app
 
-import sys
-
-from .cli.main import main
-
-if __name__ == "__main__":
-    sys.exit(main())
+app()
